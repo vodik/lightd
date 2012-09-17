@@ -50,7 +50,7 @@ static int xstrtol(const char *str, long *out)
     errno = 0;
 
     *out = strtol(str, &end, 10);
-    if (errno || str == end || (end && *end))
+    if (errno || str == end)
         return -1;
 
     return 0;
