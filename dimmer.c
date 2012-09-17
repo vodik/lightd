@@ -214,7 +214,7 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
         " -h, --help             display this help and exit\n"
         " -v, --version          display version\n"
         " -t, --timeout=TIME     the timeout in seconds to dim after\n"
-        " -d, --dim=LEVEL        how much to dim by\n", out);
+        " -d, --dim-by=LEVEL     how much to dim by\n", out);
 
     exit(out == stderr ? EXIT_FAILURE : EXIT_SUCCESS);
 }
@@ -228,12 +228,12 @@ int main(int argc, char *argv[])
         { "help",    no_argument,       0, 'h' },
         { "version", no_argument,       0, 'v' },
         { "timeout", required_argument, 0, 't' },
-        { "dim",     required_argument, 0, 'd' },
+        { "dim-by",  required_argument, 0, 'd' },
         { 0, 0, 0, 0 }
     };
 
     while (true) {
-        int opt = getopt_long(argc, argv, "hva:", opts, NULL);
+        int opt = getopt_long(argc, argv, "hvt:d:", opts, NULL);
         if (opt == -1)
             break;
 
