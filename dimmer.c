@@ -165,7 +165,6 @@ static void ev_findall(void)
 
 static void inotify_read(void)
 {
-    /* size of the event structure, not counting name */
     filepath_t path;
     uint8_t buf[1024 * (sizeof(struct inotify_event) + 16)];
     int nread, i = 0;
