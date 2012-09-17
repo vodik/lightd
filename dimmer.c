@@ -306,7 +306,7 @@ int main(int argc, char *argv[])
     signal(SIGTERM, sighandler);
     signal(SIGINT,  sighandler);
 
-    int wd = inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE | IN_DELETE);
+    int wd = inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE);
     if (wd < 0)
         err(EXIT_FAILURE, "failed to watch /dev/input");
 
