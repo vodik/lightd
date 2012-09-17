@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <memory.h>
+#include <getopt.h>
 #include <limits.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -40,6 +41,21 @@ struct backlight_t {
 static int epoll_fd;
 static struct backlight_t b;
 
+static int xstrtol(const char *str, long *out)
+{
+    char *end = NULL;
+
+    if (str == NULL || *str == '\0')
+        return -1;
+    errno = 0;
+
+    *out = strtol(str, &end, 10);
+    if (errno || str == end || (end && *end))
+        return -1;
+
+    return 0;
+}
+
 static int get(filepath_t path, long *value)
 {
     int fd = open(path, O_RDONLY);
@@ -48,13 +64,12 @@ static int get(filepath_t path, long *value)
         return -1;
     }
 
-    char buf[1024], *end = NULL;
+    char buf[1024];
     if (read(fd, buf, 1024) < 0)
         err(EXIT_FAILURE, "failed to read %s", path);
 
-    *value = strtol(buf, &end, 10);
-    if (errno || buf == end)
-        errx(EXIT_FAILURE, "not a number: %s", buf);
+    if (xstrtol(buf, value) < 0)
+        errx(EXIT_FAILURE, "result not a number: %s", buf);
 
     close(fd);
     return 0;
@@ -167,6 +182,7 @@ static int run(int timeout, int dim)
         if (n == 0 && dim_timeout > 0) {
             dim_timeout = -1;
             printf("TIMEOUT: inactivity\n");
+            get(b.dev, &b.cur);
             set(b.dev, CLAMP(b.cur - dim, 0, b.max));
         } else if (dim_timeout == -1) {
             dim_timeout = timeout;
@@ -192,9 +208,55 @@ static int run(int timeout, int dim)
     return 0;
 }
 
-int main(void)
+static void __attribute__((__noreturn__)) usage(FILE *out)
 {
+    fprintf(out, "usage: %s [options]\n", program_invocation_short_name);
+    fputs("Options:\n"
+        " -h, --help             display this help and exit\n"
+        " -v, --version          display version\n"
+        " -t, --timeout=TIME     the timeout in seconds to dim after\n"
+        " -d, --dim=LEVEL        how much to dim by\n", out);
+
+    exit(out == stderr ? EXIT_FAILURE : EXIT_SUCCESS);
+}
+
+int main(int argc, char *argv[])
+{
+    long timeout = 10, dim = 2;
     int rc = 0;
+
+    static const struct option opts[] = {
+        { "help",    no_argument,       0, 'h' },
+        { "version", no_argument,       0, 'v' },
+        { "timeout", required_argument, 0, 't' },
+        { "dim",     required_argument, 0, 'd' },
+        { 0, 0, 0, 0 }
+    };
+
+    while (true) {
+        int opt = getopt_long(argc, argv, "hva:", opts, NULL);
+        if (opt == -1)
+            break;
+
+        switch (opt) {
+        case 'h':
+            usage(stdout);
+            break;
+        case 'v':
+            printf("%s %s\n", program_invocation_short_name, DIMMER_VERSION);
+            return 0;
+        case 't':
+            if (xstrtol(optarg, &timeout) < 0)
+                errx(EXIT_FAILURE, "invalid timeout: %s", optarg);
+            break;
+        case 'd':
+            if (xstrtol(optarg, &dim) < 0)
+                errx(EXIT_FAILURE, "invalid dim: %s", optarg);
+            break;
+        default:
+            usage(stderr);
+        }
+    }
 
     epoll_fd = epoll_create1(0);
     if (epoll_fd < 0)
@@ -207,7 +269,7 @@ int main(void)
     signal(SIGINT,  sighandler);
 
     ev_findall();
-    rc = run(7000, 2);
+    rc = run(timeout * 1000, dim);
 
     close(epoll_fd);
     return rc;
