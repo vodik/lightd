@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <err.h>
+#include <syslog.h>
 
 #include <sys/types.h>
 #include <sys/epoll.h>
@@ -133,7 +134,7 @@ static int ev_adddevice(filepath_t path)
             .events  = EPOLLIN | EPOLLET
         };
 
-        printf("adding device %s\n", name);
+        syslog(LOG_INFO, "monitoring device %s\n", name);
         if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0)
             err(EXIT_FAILURE, "failed to add to epoll");
     } else
@@ -181,12 +182,10 @@ static int run(int timeout, int dim)
 
         if (n == 0 && dim_timeout > 0) {
             dim_timeout = -1;
-            printf("TIMEOUT: inactivity\n");
             get(b.dev, &b.cur);
             set(b.dev, CLAMP(b.cur - dim, 0, b.max));
         } else if (dim_timeout == -1) {
             dim_timeout = timeout;
-            printf("EVENT: activity\n");
             set(b.dev, CLAMP(b.cur, 0, b.max));
         }
 
@@ -196,7 +195,7 @@ static int run(int timeout, int dim)
             if (evt->events & EPOLLERR ||
                 evt->events & EPOLLHUP ||
                 !(evt->events & EPOLLIN)) {
-                fprintf(stderr, "epoll error\n");
+                warnx("epoll error");
                 close(evt->data.fd);
                 continue;
             } else {
