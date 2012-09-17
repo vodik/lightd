@@ -218,9 +218,6 @@ static int run(int timeout, int dim)
             dim_timeout = -1;
             get(b.dev, &b.cur);
             set(b.dev, CLAMP(b.cur - dim, 0, b.max));
-        } else if (dim_timeout == -1) {
-            dim_timeout = timeout;
-            set(b.dev, CLAMP(b.cur, 0, b.max));
         }
 
         for (i = 0; i < n; ++i) {
