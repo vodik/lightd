@@ -221,7 +221,7 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
 
 int main(int argc, char *argv[])
 {
-    long timeout = 10, dim = 2;
+    long timeout = 15, dim = 2;
     int rc = 0;
 
     static const struct option opts[] = {
