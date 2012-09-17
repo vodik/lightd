@@ -18,6 +18,7 @@
 #include <sys/inotify.h>
 #include <linux/input.h>
 
+
 #define CLAMP(x, low, high) \
     __extension__ ({ \
         typeof(x) _x = (x); \
@@ -39,7 +40,7 @@ struct backlight_t {
     filepath_t dev;
 };
 
-static int epoll_fd;
+static int epoll_fd, inotify_fd;
 static struct backlight_t b;
 
 static int xstrtol(const char *str, long *out)
@@ -134,7 +135,7 @@ static int ev_adddevice(filepath_t path)
             .events  = EPOLLIN | EPOLLET
         };
 
-        syslog(LOG_INFO, "monitoring device %s\n", name);
+        syslog(LOG_INFO, "monitoring device %s: %s\n", name, path);
         if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0)
             err(EXIT_FAILURE, "failed to add to epoll");
     } else
@@ -160,6 +161,39 @@ static void ev_findall(void)
     }
 
     closedir(dir);
+}
+
+static void inotify_read(void)
+{
+    /* size of the event structure, not counting name */
+    filepath_t path;
+    uint8_t buf[1024 * (sizeof(struct inotify_event) + 16)];
+    int nread, i = 0;
+
+    while (true) {
+        nread = read(inotify_fd, buf, sizeof(buf));
+        if (nread < 0) {
+            if (errno != EAGAIN) {
+                err(EXIT_FAILURE, "failed to read inotify data");
+                break;
+            }
+        } else
+            break;
+    }
+
+    while (i < nread) {
+        struct inotify_event *event = (struct inotify_event *)&buf[i];
+
+        if (!event->len)
+            continue;
+
+        if (event->mask & IN_CREATE) {
+            snprintf(path, PATH_MAX, "/dev/input/%s", event->name);
+            ev_adddevice(path);
+        }
+
+        i += sizeof(struct inotify_event) + event->len;
+    }
 }
 
 static void sighandler(int signum)
@@ -192,13 +226,17 @@ static int run(int timeout, int dim)
         for (i = 0; i < n; ++i) {
             struct epoll_event *evt = &events[i];
 
-            if (evt->events & EPOLLERR ||
-                evt->events & EPOLLHUP ||
-                !(evt->events & EPOLLIN)) {
-                warnx("epoll error");
+            if (evt->events & EPOLLERR || evt->events & EPOLLHUP) {
                 close(evt->data.fd);
                 continue;
+            } else if (evt->data.fd == inotify_fd) {
+                inotify_read();
             } else {
+                if (dim_timeout == -1) {
+                    dim_timeout = timeout;
+                    set(b.dev, CLAMP(b.cur, 0, b.max));
+                }
+
                 lseek(evt->data.fd, 0, SEEK_END);
             }
         }
@@ -261,11 +299,27 @@ int main(int argc, char *argv[])
     if (epoll_fd < 0)
         err(EXIT_FAILURE, "failed to start epoll");
 
+    inotify_fd = inotify_init();
+    if (inotify_fd < 0)
+        err(EXIT_FAILURE, "failed to start inotify");
+
     if (get_backlight_info(&b, 0) < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");
 
     signal(SIGTERM, sighandler);
     signal(SIGINT,  sighandler);
+
+    int wd = inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE | IN_DELETE);
+    if (wd < 0)
+        err(EXIT_FAILURE, "failed to watch /dev/input");
+
+    struct epoll_event event = {
+        .data.fd = inotify_fd,
+        .events  = EPOLLIN | EPOLLET
+    };
+
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, inotify_fd, &event) < 0)
+        err(EXIT_FAILURE, "failed to add inotify to epoll");
 
     ev_findall();
     rc = run(timeout * 1000, dim);
