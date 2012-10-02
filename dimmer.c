@@ -18,14 +18,7 @@
 #include <sys/inotify.h>
 #include <linux/input.h>
 
-
-#define CLAMP(x, low, high) \
-    __extension__ ({ \
-        typeof(x) _x = (x); \
-        typeof(low) _low = (low); \
-        typeof(high) _high = (high); \
-        ((_x > _high) ? _high : ((_x < _low) ? _low : _x)); \
-    })
+#include "backlight.h"
 
 #define BIT(_bit, array) \
     __extension__ ({ \
@@ -33,13 +26,7 @@
         (array)[bit / 8] & (1 << (bit % 8)); \
     })
 
-typedef char filepath_t[PATH_MAX];
-
-struct backlight_t {
-    long max, cur;
-    filepath_t dev;
-};
-
+static double orig;
 static int epoll_fd, inotify_fd;
 static struct backlight_t b;
 
@@ -53,57 +40,6 @@ static int xstrtol(const char *str, long *out)
 
     *out = strtol(str, &end, 10);
     if (errno || str == end)
-        return -1;
-
-    return 0;
-}
-
-static int get(filepath_t path, long *value)
-{
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        warn("failed to open %s", path);
-        return -1;
-    }
-
-    char buf[1024];
-    if (read(fd, buf, 1024) < 0)
-        err(EXIT_FAILURE, "failed to read %s", path);
-
-    if (xstrtol(buf, value) < 0)
-        errx(EXIT_FAILURE, "result not a number: %s", buf);
-
-    close(fd);
-    return 0;
-}
-
-static int set(filepath_t path, long value)
-{
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) {
-        warn("failed to open %s", path);
-        return -1;
-    }
-
-    char buf[1024];
-    int len = snprintf(buf, 1024, "%ld", value);
-    if (write(fd, buf, len) < 0)
-        err(EXIT_FAILURE, "failed to set backlight");
-
-    close(fd);
-    return 0;
-}
-
-static int get_backlight_info(struct backlight_t *b, int id)
-{
-    filepath_t path;
-
-    snprintf(path, PATH_MAX, "/sys/class/backlight/acpi_video%d/max_brightness", id);
-    if (get(path, &b->max) < 0)
-        return -1;
-
-    snprintf(b->dev, PATH_MAX, "/sys/class/backlight/acpi_video%d/brightness", id);
-    if (get(b->dev, &b->cur) < 0)
         return -1;
 
     return 0;
@@ -200,7 +136,7 @@ static void sighandler(int signum)
     switch (signum) {
     case SIGINT:
     case SIGTERM:
-        set(b.dev, b.cur);
+        backlight_set(&b, orig);
         exit(EXIT_SUCCESS);
     }
 }
@@ -215,8 +151,8 @@ static int run(int timeout, int dim)
 
         if (n == 0 && dim_timeout > 0) {
             dim_timeout = -1;
-            get(b.dev, &b.cur);
-            set(b.dev, CLAMP(b.cur - dim, 0, b.max));
+            orig = backlight_get(&b);
+            backlight_set(&b, CLAMP(orig - dim, 0, 100));
         }
 
         for (i = 0; i < n; ++i) {
@@ -230,7 +166,7 @@ static int run(int timeout, int dim)
             } else {
                 if (dim_timeout == -1) {
                     dim_timeout = timeout;
-                    set(b.dev, CLAMP(b.cur, 0, b.max));
+                    backlight_set(&b, CLAMP(orig, 0, 100));
                 }
 
                 lseek(evt->data.fd, 0, SEEK_END);
@@ -255,7 +191,7 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
 
 int main(int argc, char *argv[])
 {
-    long timeout = 12, dim = 3;
+    long timeout = 12, dim = 5;
     int rc = 0;
 
     static const struct option opts[] = {
@@ -299,7 +235,7 @@ int main(int argc, char *argv[])
     if (inotify_fd < 0)
         err(EXIT_FAILURE, "failed to start inotify");
 
-    if (get_backlight_info(&b, 0) < 0)
+    if (backlight_find_best(&b) < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");
 
     signal(SIGTERM, sighandler);

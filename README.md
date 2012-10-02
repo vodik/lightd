@@ -1,11 +1,23 @@
-## dimmer
+## backlight-utils
 
-A simple daemon that automatically dims the screen. It listens to evdev
-events and monitors for inactivity.
+Some utilities I've written to managing my Thinkpad's backlight.
 
-### Notes:
+### bset
 
-For ``xf86-input-synaptic`` users, please configure synaptics with:
+```
+usage: bset [value]
+```
+
+`bset` is a simple utility to control the backlight. It is suid so
+any normal user can control the brightness.
+
+### dimmer
+
+`dimmer` is a simple daemon that automatically dims the screen. It
+listens to evdev events and monitors for inactivity.
+
+**NOTE**: For ``xf86-input-synaptic`` users, please configure synaptics
+with:
 
 ```
 Option "GrabEventDevice" "false"
