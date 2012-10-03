@@ -26,7 +26,7 @@
         (array)[bit / 8] & (1 << (bit % 8)); \
     })
 
-static double orig;
+static double blight;
 static int epoll_fd, inotify_fd;
 static struct backlight_t b;
 
@@ -136,12 +136,12 @@ static void sighandler(int signum)
     switch (signum) {
     case SIGINT:
     case SIGTERM:
-        backlight_set(&b, orig);
+        backlight_set(&b, blight);
         exit(EXIT_SUCCESS);
     }
 }
 
-static int run(int timeout, int dim)
+static int run(int timeout, double dim)
 {
     struct epoll_event events[64];
     int dim_timeout = timeout;
@@ -151,8 +151,8 @@ static int run(int timeout, int dim)
 
         if (n == 0 && dim_timeout > 0) {
             dim_timeout = -1;
-            orig = backlight_get(&b);
-            backlight_set(&b, CLAMP(orig - dim, 0, 100));
+            blight = backlight_get(&b);
+            backlight_set(&b, CLAMP(blight - dim, 1.5, 100));
         }
 
         for (i = 0; i < n; ++i) {
@@ -166,7 +166,7 @@ static int run(int timeout, int dim)
             } else {
                 if (dim_timeout == -1) {
                     dim_timeout = timeout;
-                    backlight_set(&b, CLAMP(orig, 0, 100));
+                    backlight_set(&b, CLAMP(blight, 0, 100));
                 }
 
                 lseek(evt->data.fd, 0, SEEK_END);
@@ -191,7 +191,7 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
 
 int main(int argc, char *argv[])
 {
-    long timeout = 12, dim = 5;
+    long timeout = 10, dim = 2;
     int rc = 0;
 
     static const struct option opts[] = {
