@@ -25,7 +25,6 @@ static int get(filepath_t path, long *value)
     errno = 0;
     *value = strtol(buf, &end, 10);
     if (errno || buf == end) {
-        perror("fuck");
         warn("not a number: %s", buf);
         return -1;
     }
