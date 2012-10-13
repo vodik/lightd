@@ -141,6 +141,22 @@ static void sighandler(int signum)
     }
 }
 
+static void backlight_dim(struct backlight_t *b, double dim)
+{
+    double v = backlight_get(b);
+    printf("read v at %f\n", v);
+
+    if (dim) {
+        printf("dimming to %f\n", v - dim);
+        backlight_set(b, CLAMP(v - dim, 1.5, 100));
+    } else if (blight > v) {
+        printf("undimming to %f\n", blight);
+        backlight_set(b, blight);
+    }
+
+    blight = v;
+}
+
 static int run(int timeout, double dim)
 {
     struct epoll_event events[64];
@@ -151,8 +167,7 @@ static int run(int timeout, double dim)
 
         if (n == 0 && dim_timeout > 0) {
             dim_timeout = -1;
-            blight = backlight_get(&b);
-            backlight_set(&b, CLAMP(blight - dim, 1.5, 100));
+            backlight_dim(&b, dim);
         }
 
         for (i = 0; i < n; ++i) {
@@ -166,7 +181,7 @@ static int run(int timeout, double dim)
             } else {
                 if (dim_timeout == -1) {
                     dim_timeout = timeout;
-                    backlight_set(&b, CLAMP(blight, 0, 100));
+                    backlight_dim(&b, 0);
                 }
 
                 lseek(evt->data.fd, 0, SEEK_END);
