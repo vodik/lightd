@@ -250,7 +250,8 @@ int main(int argc, char *argv[])
     if (inotify_fd < 0)
         err(EXIT_FAILURE, "failed to start inotify");
 
-    if (backlight_find_best(&b) < 0)
+    /* if (backlight_find_best(&b) < 0) */
+    if (backlight_init(&b, "acpi_video0") < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");
 
     signal(SIGTERM, sighandler);
