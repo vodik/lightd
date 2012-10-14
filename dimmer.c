@@ -131,16 +131,6 @@ static void inotify_read(void)
     }
 }
 
-static void sighandler(int signum)
-{
-    switch (signum) {
-    case SIGINT:
-    case SIGTERM:
-        backlight_set(&b, blight);
-        exit(EXIT_SUCCESS);
-    }
-}
-
 static void backlight_dim(struct backlight_t *b, double dim)
 {
     double v = backlight_get(b);
@@ -155,6 +145,16 @@ static void backlight_dim(struct backlight_t *b, double dim)
     }
 
     blight = v;
+}
+
+static void sighandler(int signum)
+{
+    switch (signum) {
+    case SIGINT:
+    case SIGTERM:
+        backlight_dim(&b, 0);
+        exit(EXIT_SUCCESS);
+    }
 }
 
 static int run(int timeout, double dim)
@@ -206,7 +206,7 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
 
 int main(int argc, char *argv[])
 {
-    long timeout = 10, dim = 2;
+    long timeout = 10, dim = 7;
     int rc = 0;
 
     static const struct option opts[] = {
