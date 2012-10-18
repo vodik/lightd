@@ -86,6 +86,10 @@ int backlight_find_best(struct backlight_t *b)
         err(EXIT_FAILURE, "failed to open directory");
 
     while ((dp = readdir(dir))) {
+        /* HACK: intel_backlight broken for me, skip it */
+        if (strcmp(dp->d_name, "intel_backlight") == 0)
+            continue;
+
         if (dp->d_type & DT_LNK) {
             backlight_init(&node, dp->d_name);
             if (node.max > biggest) {
