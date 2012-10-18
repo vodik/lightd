@@ -134,15 +134,11 @@ static void inotify_read(void)
 static void backlight_dim(struct backlight_t *b, double dim)
 {
     double v = backlight_get(b);
-    printf("read v at %f\n", v);
 
-    if (dim) {
-        printf("dimming to %f\n", v - dim);
+    if (dim)
         backlight_set(b, CLAMP(v - dim, 1.5, 100));
-    } else if (blight > v) {
-        printf("undimming to %f\n", blight);
+    else if (blight > v)
         backlight_set(b, blight);
-    }
 
     blight = v;
 }
