@@ -14,6 +14,7 @@ install: dimmer
 	install -Dm755  dimmer ${DESTDIR}/usr/bin/dimmer
 	install -Dm5755 bset ${DESTDIR}/usr/bin/bset
 	install -Dm644  dimmer.service ${DESTDIR}/usr/lib/systemd/system/dimmer.service
+	install -Dm644  dimmer.conf ${DESTDIR}/etc/conf.d/dimmer.conf
 
 clean:
 	${RM} bset dimmer *.o
