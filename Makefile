@@ -15,6 +15,7 @@ install: dimmer
 	install -Dm5755 bset ${DESTDIR}/usr/bin/bset
 	install -Dm644  dimmer.service ${DESTDIR}/usr/lib/systemd/system/dimmer.service
 	install -Dm644  dimmer.conf ${DESTDIR}/etc/conf.d/dimmer.conf
+	install -Dm644  50-synaptics-no-grab.conf ${DESTDIR}/etc/X11/xorg.conf.d/50-synaptics-no-grab.conf
 
 clean:
 	${RM} bset dimmer *.o

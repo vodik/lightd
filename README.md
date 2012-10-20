@@ -25,12 +25,13 @@ Options:
 `dimmer` is a simple daemon that automatically dims the screen. It
 listens to evdev events and monitors for inactivity.
 
-**NOTE**: For ``xf86-input-synaptic`` users, please configure synaptics
-with:
+**NOTE**: For ``xf86-input-synaptic`` users, the module had to be
+configured not to grab the device.
 
 ```
 Option "GrabEventDevice" "false"
 ```
 
-Otherwise ``dimmer`` won't be able to watch for inactivity. The driver
-likes to be greedy with events by default.
+Otherwise ``dimmer`` won't be able to wake on activity on the touchpad,
+the driver likes to be greedy by default. I should ship a configlet to
+deal with this.
