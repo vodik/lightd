@@ -65,7 +65,7 @@ int backlight_init(struct backlight_t *b, const char *device)
 int backlight_set(struct backlight_t *b, double value)
 {
     value = value / 100.0 * (double)b->max;
-    return set(b->dev, value);
+    return set(b->dev, (int)value);
 }
 
 double backlight_get(struct backlight_t *b)
