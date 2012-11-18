@@ -2,8 +2,7 @@
 Description=A simple backlight dimmer
 
 [Service]
-EnvironmentFile=/etc/conf.d/dimmer.conf
-ExecStart=/usr/bin/dimmer -t $TIMEOUT -d $DIM_BY
+ExecStart=/usr/bin/dimmer
 
 [Install]
 WantedBy=multi-user.target
