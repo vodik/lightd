@@ -69,9 +69,7 @@ int main(int argc, char *argv[])
 
     if (backlight_find_best(&b) < 0)
         errx(EXIT_FAILURE, "couldn't get backlight information");
-
     current = backlight_get(&b);
-    printf("current %f\n", current);
 
     if (optind == argc) {
         printf("%.1f%%\n", backlight_get(&b));
