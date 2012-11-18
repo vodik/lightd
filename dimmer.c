@@ -188,7 +188,6 @@ static int run(int timeout, double dim)
 
             if (evt->events & EPOLLERR || evt->events & EPOLLHUP) {
                 close(evt->data.fd);
-                continue;
             } else if (evt->data.fd == inotify_fd) {
                 inotify_read();
             } else {
