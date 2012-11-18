@@ -4,7 +4,7 @@ Some utilities I've written to managing my Thinkpad's backlight.
 
 ### bset
 
-    usage: bset [options]
+    usage: bset [options] [value]
     Options:
      -h, --help             display this help and exit
      -v, --version          display version
