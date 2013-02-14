@@ -28,7 +28,6 @@
 #include <signal.h>
 #include <errno.h>
 #include <err.h>
-#include <syslog.h>
 
 #include <sys/types.h>
 #include <sys/epoll.h>
@@ -61,36 +60,51 @@ static int xstrtol(const char *str, long *out)
     return 0;
 }
 
+static void sighandler(int signum)
+{
+    switch (signum) {
+    case SIGINT:
+    case SIGTERM:
+        backlight_dim(&b, 0);
+        exit(EXIT_SUCCESS);
+    }
+}
+
 static int ev_adddevice(filepath_t path)
 {
     int rc = 0;
-    char name[256] = "Unknown";
+    char name[256];
     uint8_t evtype_bitmask[(EV_MAX + 7) / 8];
 
     int fd = open(path, O_RDONLY);
     if (fd < 0)
         err(EXIT_FAILURE, "failed to open %s", path);
 
-    if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0 ||
-        ioctl(fd, EVIOCGBIT(0, EV_MAX), evtype_bitmask) < 0) {
-        close(fd);
-        return 1;
-    }
+    rc = ioctl(fd, EVIOCGBIT(0, EV_MAX), evtype_bitmask);
+    if (rc < 0)
+        goto cleanup;
 
-    rc |= bit(EV_KEY, evtype_bitmask);
+    rc  = bit(EV_KEY, evtype_bitmask);
     rc |= bit(EV_REL, evtype_bitmask);
     rc |= bit(EV_ABS, evtype_bitmask);
+    if (!rc)
+        goto cleanup;
 
-    if (rc) {
-        struct epoll_event event = {
-            .data.fd = fd,
-            .events  = EPOLLIN | EPOLLET
-        };
+    rc = ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+    if (rc < 0)
+        goto cleanup;
 
-        syslog(LOG_INFO, "monitoring device %s: %s\n", name, path);
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0)
-            err(EXIT_FAILURE, "failed to add to epoll");
-    } else
+    struct epoll_event event = {
+        .data.fd = fd,
+        .events  = EPOLLIN | EPOLLET
+    };
+
+    printf("Monitoring device %s: %s\n", name, path);
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0)
+        err(EXIT_FAILURE, "failed to add to epoll");
+
+cleanup:
+    if (rc < 0)
         close(fd);
 
     return rc;
@@ -193,13 +207,9 @@ static int run(int timeout, double dim)
                 close(evt->data.fd);
             } else if (evt->data.fd == inotify_fd) {
                 inotify_read();
-            } else {
-                if (dim_timeout == -1) {
-                    dim_timeout = timeout;
-                    backlight_dim(&b, 0);
-                }
-
-                lseek(evt->data.fd, 0, SEEK_END);
+            } else if (dim_timeout == -1) {
+                dim_timeout = timeout;
+                backlight_dim(&b, 0);
             }
         }
     }
