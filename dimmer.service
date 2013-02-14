@@ -3,6 +3,8 @@ Description=A simple backlight dimmer
 
 [Service]
 ExecStart=/usr/bin/dimmer
+StandardOutput=syslog
+StandardError=syslog
 
 [Install]
 WantedBy=multi-user.target
