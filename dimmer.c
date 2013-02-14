@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <err.h>
 
+#include <libudev.h>
 #include <sys/types.h>
 #include <sys/epoll.h>
 #include <sys/inotify.h>
@@ -37,8 +38,11 @@
 #include "backlight.h"
 
 static double blight;
-static int epoll_fd, inotify_fd;
+static int epoll_fd, inotify_fd, udev_fd;
 static struct backlight_t b;
+
+static struct udev *udev;
+static struct udev_monitor *mon;
 
 static uint8_t bit(int bit, const uint8_t *array)
 {
@@ -60,14 +64,44 @@ static int xstrtol(const char *str, long *out)
     return 0;
 }
 
-static void sighandler(int signum)
+static int udev_monitor_init(void)
 {
-    switch (signum) {
-    case SIGINT:
-    case SIGTERM:
-        backlight_dim(&b, 0);
-        exit(EXIT_SUCCESS);
+    udev = udev_new();
+    if (!udev)
+        err(EXIT_FAILURE, "can't create udev");
+
+    mon = udev_monitor_new_from_netlink(udev, "udev");
+    udev_monitor_filter_add_match_subsystem_devtype(mon, "power_supply", NULL);
+    udev_monitor_enable_receiving(mon);
+
+    return udev_monitor_get_fd(mon);
+}
+
+static int udev_power_online(int *ac, bool poll)
+{
+    if (poll) {
+        fd_set fdset;
+        FD_ZERO(&fdset);
+        FD_SET(udev_fd, &fdset);
+
+        select(udev_fd+1, &fdset, NULL, NULL, NULL);
     }
+
+    struct udev_device *dev = udev_monitor_receive_device(mon);
+    if (!dev && errno != EAGAIN)
+        err(EXIT_FAILURE, "no device recieved");
+
+    const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
+    if (!online)
+        return 0;
+
+    if (strcmp("1", online) == 0)
+        *ac = 1;
+    else if (strcmp("0", online) == 0)
+        *ac = 0;
+
+    udev_device_unref(dev);
+    return 1;
 }
 
 static int ev_adddevice(filepath_t path)
@@ -197,6 +231,14 @@ static int run(int timeout, double dim)
                 close(evt->data.fd);
             } else if (evt->data.fd == inotify_fd) {
                 inotify_read();
+            } else if (evt->data.fd == udev_fd) {
+                int ac;
+                if (udev_power_online(&ac, false)) {
+                    while (ac) {
+                        printf("POOPING\n");
+                        udev_power_online(&ac, true);
+                    }
+                }
             } else if (dim_timeout == -1) {
                 dim_timeout = timeout;
                 backlight_dim(&b, 0);
@@ -275,6 +317,10 @@ int main(int argc, char *argv[])
     if (inotify_fd < 0)
         err(EXIT_FAILURE, "failed to start inotify");
 
+    udev_fd = udev_monitor_init();
+    if (udev_fd < 0)
+        err(EXIT_FAILURE, "failed to start udev");
+
     if (backlight_find_best(&b) < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");
 
@@ -293,10 +339,19 @@ int main(int argc, char *argv[])
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, inotify_fd, &event) < 0)
         err(EXIT_FAILURE, "failed to add inotify to epoll");
 
+    struct epoll_event event2 = {
+        .data.fd = udev_fd,
+        .events  = EPOLLIN | EPOLLET
+    };
+
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, udev_fd, &event2) < 0)
+        err(EXIT_FAILURE, "failed to add udev to epoll");
+
     ev_findall();
     rc = run(timeout * 1000, dim);
 
     close(epoll_fd);
+    close(udev_fd);
     return rc;
 }
 

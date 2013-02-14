@@ -5,6 +5,8 @@ CFLAGS := -std=gnu99 \
 	-DDIMMER_VERSION=\"${VERSION}\" \
 	${CFLAGS}
 
+LDFLAGS := -ludev
+
 all: dimmer bset
 
 bset: bset.o backlight.o
