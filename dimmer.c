@@ -178,7 +178,11 @@ static int run(int timeout, double dim)
     while (true) {
         int i, n = epoll_wait(epoll_fd, events, 64, dim_timeout);
 
-        if (n == 0 && dim_timeout > 0) {
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            err(EXIT_FAILURE, "epoll_wait failed");
+        } else if (n == 0 && dim_timeout > 0) {
             dim_timeout = -1;
             backlight_dim(&b, dim);
         }
