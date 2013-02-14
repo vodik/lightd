@@ -37,15 +37,14 @@
 
 #include "backlight.h"
 
-#define BIT(_bit, array) \
-    __extension__ ({ \
-        typeof(_bit) bit = (_bit); \
-        (array)[bit / 8] & (1 << (bit % 8)); \
-    })
-
 static double blight;
 static int epoll_fd, inotify_fd;
 static struct backlight_t b;
+
+static uint8_t bit(int bit, const uint8_t *array)
+{
+    return array[bit / 8] & (1 << (bit % 8));
+}
 
 static int xstrtol(const char *str, long *out)
 {
@@ -78,9 +77,9 @@ static int ev_adddevice(filepath_t path)
         return 1;
     }
 
-    rc |= BIT(EV_KEY, evtype_bitmask);
-    rc |= BIT(EV_REL, evtype_bitmask);
-    rc |= BIT(EV_ABS, evtype_bitmask);
+    rc |= bit(EV_KEY, evtype_bitmask);
+    rc |= bit(EV_REL, evtype_bitmask);
+    rc |= bit(EV_ABS, evtype_bitmask);
 
     if (rc) {
         struct epoll_event event = {
