@@ -104,7 +104,7 @@ static int ev_adddevice(filepath_t path)
         err(EXIT_FAILURE, "failed to add to epoll");
 
 cleanup:
-    if (rc < 0)
+    if (rc <= 0)
         close(fd);
 
     return rc;
@@ -173,16 +173,6 @@ static void backlight_dim(struct backlight_t *b, double dim)
     blight = v;
 }
 
-static void sighandler(int signum)
-{
-    switch (signum) {
-    case SIGINT:
-    case SIGTERM:
-        backlight_dim(&b, 0);
-        exit(EXIT_SUCCESS);
-    }
-}
-
 static int run(int timeout, double dim)
 {
     struct epoll_event events[64];
@@ -215,6 +205,16 @@ static int run(int timeout, double dim)
     }
 
     return 0;
+}
+
+static void sighandler(int signum)
+{
+    switch (signum) {
+    case SIGINT:
+    case SIGTERM:
+        backlight_dim(&b, 0);
+        exit(EXIT_SUCCESS);
+    }
 }
 
 static void __attribute__((__noreturn__)) usage(FILE *out)
