@@ -48,7 +48,7 @@ struct power_state_t {
     /* handler_fn handle_udev; */
 };
 
-static struct power_state_t states[2] = {
+static struct power_state_t States[2] = {
     [AC_ON] = {
         .timeout = -1,
         .brightness = 100
@@ -57,7 +57,7 @@ static struct power_state_t states[2] = {
         .timeout = 5 * 1000,
         .brightness = 5
     }
-};
+}, *state = NULL;
 
 #define AC_BOTH -1
 
@@ -87,6 +87,19 @@ static uint8_t bit(int bit, const uint8_t *array)
 /*     blight = v; */
 /* } */
 
+// EPOLL CRAP {{{1
+static void init_epoll(void)
+{
+    int i;
+
+    for (i = 0; i < 2; ++i) {
+        States[i].epoll_fd = epoll_create1(0);
+
+        if (States[i].epoll_fd < 0)
+            err(EXIT_FAILURE, "failed to start epoll");
+    }
+}
+
 static void register_epoll(int fd, enum power mode)
 {
     struct epoll_event event = {
@@ -95,20 +108,30 @@ static void register_epoll(int fd, enum power mode)
     };
 
     if ((mode == AC_OFF || mode == AC_BOTH) &&
-        (epoll_ctl(states[AC_OFF].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
+        (epoll_ctl(States[AC_OFF].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
         err(EXIT_FAILURE, "failed to add udev monitor to epoll");
 
     if ((mode == AC_ON || mode == AC_BOTH) &&
-        (epoll_ctl(states[AC_ON].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
+        (epoll_ctl(States[AC_ON].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
         err(EXIT_FAILURE, "failed to add udev monitor to epoll");
 }
+// }}}
 
 static void power_status(const char *online)
 {
+    enum power next = mode;
+
     if (strcmp("1", online) == 0)
-        mode = AC_ON;
+        next = AC_ON;
     else if (strcmp("0", online) == 0)
-        mode = AC_OFF;
+        next = AC_OFF;
+
+    if (next != mode) {
+        printf("STATE CHANGE HERE\n");
+        state = &States[next];
+    }
+
+    mode = next;
 }
 
 // {{{1 UDEV MAGIC
@@ -208,27 +231,14 @@ static void ev_findall(void)
 }
 // }}}
 
-static void init_epoll(void)
-{
-    int i;
-
-    for (i = 0; i < 2; ++i) {
-        states[i].epoll_fd = epoll_create1(0);
-
-        if (states[i].epoll_fd < 0)
-            err(EXIT_FAILURE, "failed to start epoll");
-    }
-}
-
 static int run()
 {
     struct epoll_event events[64];
-    int dim_timeout = states[mode].timeout;
+    int dim_timeout = state->timeout;
 
     while (true) {
-        struct power_state_t *cur = &states[mode];
         printf("waiting with timeout: %d\n", dim_timeout);
-        int i, n = epoll_wait(cur->epoll_fd, events, 64, dim_timeout);
+        int i, n = epoll_wait(state->epoll_fd, events, 64, dim_timeout);
 
         if (n < 0) {
             if (errno == EINTR)
@@ -250,17 +260,17 @@ static int run()
 
                 switch (mode) {
                 case AC_ON:
-                    printf("on AC power: BLIGHT: %f\n", states[mode].brightness);
+                    printf("on AC power: BLIGHT: %f\n", state->brightness);
                     break;
                 case AC_OFF:
-                    printf("on battery power: BLIGHT: %f\n", states[mode].brightness);
+                    printf("on battery power: BLIGHT: %f\n", state->brightness);
                     break;
                 }
-                backlight_set(&b, states[mode].brightness);
+                backlight_set(&b, state->brightness);
 
-                dim_timeout = states[mode].timeout;
-            } else if (dim_timeout == -1 && cur->timeout != -1) {
-                dim_timeout = cur->timeout;
+                dim_timeout = state->timeout;
+            } else if (dim_timeout == -1 && state->timeout != -1) {
+                dim_timeout = state->timeout;
                 printf("TIME TO UNDIM\n");
             }
         }
@@ -279,13 +289,14 @@ int main(void)
         errx(EXIT_FAILURE, "failed to get backlight info");
 
     udev_enumerate();
+    state = &States[mode];
 
     switch (mode) {
     case AC_ON:
-        printf("on AC power: BLIGHT: %f\n", states[mode].brightness);
+        printf("on AC power: BLIGHT: %f\n", state->brightness);
         break;
     case AC_OFF:
-        printf("on battery power: BLIGHT: %f\n", states[mode].brightness);
+        printf("on battery power: BLIGHT: %f\n", state->brightness);
         break;
     }
 
@@ -302,3 +313,5 @@ int main(void)
     udev_unref(udev);
     return 0;
 }
+
+// vim: et:sts=4:sw=4:cino=(0
