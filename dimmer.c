@@ -12,7 +12,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
- * Copyright (C) Simon Gomizelj, 2012
+ * Copyright (C) Simon Gomizelj, 2013
  */
 
 #define _GNU_SOURCE
@@ -37,73 +37,123 @@
 
 #include "backlight.h"
 
-static double blight;
-static int epoll_fd, inotify_fd, udev_fd;
-static struct backlight_t b;
+enum power {AC_ON, AC_OFF};
+
+typedef void (* handler_fn)(int fd);
+
+struct power_state_t {
+    int epoll_fd;
+    int timeout;
+    double brightness;
+    /* handler_fn handle_udev; */
+};
+
+static struct power_state_t states[2] = {
+    [AC_ON] = {
+        .timeout = -1,
+        .brightness = 100
+    },
+    [AC_OFF] = {
+        .timeout = 5 * 1000,
+        .brightness = 5
+    }
+};
+
+#define AC_BOTH -1
+
+static enum power mode = AC_ON;
+
+static int udev_fd;
 
 static struct udev *udev;
 static struct udev_monitor *mon;
+
+static struct backlight_t b;
 
 static uint8_t bit(int bit, const uint8_t *array)
 {
     return array[bit / 8] & (1 << (bit % 8));
 }
 
-static int xstrtol(const char *str, long *out)
+/* static void backlight_dim(struct backlight_t *b, double dim) */
+/* { */
+/*     double v = backlight_get(b); */
+
+/*     if (dim) */
+/*         backlight_set(b, CLAMP(v - dim, 1.5, 100)); */
+/*     else if (blight > v) */
+/*         backlight_set(b, blight); */
+
+/*     blight = v; */
+/* } */
+
+static void register_epoll(int fd, enum power mode)
 {
-    char *end = NULL;
+    struct epoll_event event = {
+        .data.fd = fd,
+        .events  = EPOLLIN | EPOLLET
+    };
 
-    if (str == NULL || *str == '\0')
-        return -1;
-    errno = 0;
+    if ((mode == AC_OFF || mode == AC_BOTH) &&
+        (epoll_ctl(states[AC_OFF].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
+        err(EXIT_FAILURE, "failed to add udev monitor to epoll");
 
-    *out = strtol(str, &end, 10);
-    if (errno || str == end)
-        return -1;
-
-    return 0;
+    if ((mode == AC_ON || mode == AC_BOTH) &&
+        (epoll_ctl(states[AC_ON].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
+        err(EXIT_FAILURE, "failed to add udev monitor to epoll");
 }
 
-static int udev_monitor_init(void)
+static void power_status(const char *online)
 {
-    udev = udev_new();
-    if (!udev)
-        err(EXIT_FAILURE, "can't create udev");
-
-    mon = udev_monitor_new_from_netlink(udev, "udev");
-    udev_monitor_filter_add_match_subsystem_devtype(mon, "power_supply", NULL);
-    udev_monitor_enable_receiving(mon);
-
-    return udev_monitor_get_fd(mon);
+    if (strcmp("1", online) == 0)
+        mode = AC_ON;
+    else if (strcmp("0", online) == 0)
+        mode = AC_OFF;
 }
 
-static int udev_power_online(int *ac, bool poll)
+// {{{1 UDEV MAGIC
+static void udev_enumerate(void)
 {
-    if (poll) {
-        fd_set fdset;
-        FD_ZERO(&fdset);
-        FD_SET(udev_fd, &fdset);
+    struct udev_list_entry *devices, *dev_list_entry;
+    struct udev_device *dev;
 
-        select(udev_fd+1, &fdset, NULL, NULL, NULL);
+    struct udev_enumerate *enumerate = udev_enumerate_new(udev);
+    udev_enumerate_add_match_subsystem(enumerate, "power_supply");
+    udev_enumerate_scan_devices(enumerate);
+    devices = udev_enumerate_get_list_entry(enumerate);
+
+    udev_list_entry_foreach(dev_list_entry, devices) {
+        const char *path = udev_list_entry_get_name(dev_list_entry);
+        dev = udev_device_new_from_syspath(udev, path);
+
+        const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
+        if (online) {
+            power_status(online);
+            udev_device_unref(dev);
+            break;
+        }
+
+        udev_device_unref(dev);
     }
 
-    struct udev_device *dev = udev_monitor_receive_device(mon);
-    if (!dev && errno != EAGAIN)
-        err(EXIT_FAILURE, "no device recieved");
-
-    const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
-    if (!online)
-        return 0;
-
-    if (strcmp("1", online) == 0)
-        *ac = 1;
-    else if (strcmp("0", online) == 0)
-        *ac = 0;
-
-    udev_device_unref(dev);
-    return 1;
+    udev_enumerate_unref(enumerate);
 }
 
+static void udev_update(void)
+{
+    struct udev_device *dev = udev_monitor_receive_device(mon);
+
+    if (dev) {
+        const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
+        if (online)
+            power_status(online);
+
+        udev_device_unref(dev);
+    }
+}
+// }}}
+
+// {{{1 EVDEV INPUT
 static int ev_adddevice(filepath_t path)
 {
     int rc = 0;
@@ -128,14 +178,8 @@ static int ev_adddevice(filepath_t path)
     if (rc < 0)
         goto cleanup;
 
-    struct epoll_event event = {
-        .data.fd = fd,
-        .events  = EPOLLIN | EPOLLET
-    };
-
     printf("Monitoring device %s: %s\n", name, path);
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0)
-        err(EXIT_FAILURE, "failed to add to epoll");
+    register_epoll(fd, AC_OFF);
 
 cleanup:
     if (rc <= 0)
@@ -162,58 +206,29 @@ static void ev_findall(void)
 
     closedir(dir);
 }
+// }}}
 
-static void inotify_read(void)
+static void init_epoll(void)
 {
-    filepath_t path;
-    uint8_t buf[1024 * (sizeof(struct inotify_event) + 16)];
-    int nread, i = 0;
+    int i;
 
-    while (true) {
-        nread = read(inotify_fd, buf, sizeof(buf));
-        if (nread < 0) {
-            if (errno != EAGAIN) {
-                err(EXIT_FAILURE, "failed to read inotify data");
-                break;
-            }
-        } else
-            break;
-    }
+    for (i = 0; i < 2; ++i) {
+        states[i].epoll_fd = epoll_create1(0);
 
-    while (i < nread) {
-        struct inotify_event *event = (struct inotify_event *)&buf[i];
-
-        if (!event->len)
-            continue;
-
-        if (event->mask & IN_CREATE) {
-            snprintf(path, PATH_MAX, "/dev/input/%s", event->name);
-            ev_adddevice(path);
-        }
-
-        i += sizeof(struct inotify_event) + event->len;
+        if (states[i].epoll_fd < 0)
+            err(EXIT_FAILURE, "failed to start epoll");
     }
 }
 
-static void backlight_dim(struct backlight_t *b, double dim)
-{
-    double v = backlight_get(b);
-
-    if (dim)
-        backlight_set(b, CLAMP(v - dim, 1.5, 100));
-    else if (blight > v)
-        backlight_set(b, blight);
-
-    blight = v;
-}
-
-static int run(int timeout, double dim)
+static int run()
 {
     struct epoll_event events[64];
-    int dim_timeout = timeout;
+    int dim_timeout = states[mode].timeout;
 
     while (true) {
-        int i, n = epoll_wait(epoll_fd, events, 64, dim_timeout);
+        struct power_state_t *cur = &states[mode];
+        printf("waiting with timeout: %d\n", dim_timeout);
+        int i, n = epoll_wait(cur->epoll_fd, events, 64, dim_timeout);
 
         if (n < 0) {
             if (errno == EINTR)
@@ -221,7 +236,7 @@ static int run(int timeout, double dim)
             err(EXIT_FAILURE, "epoll_wait failed");
         } else if (n == 0 && dim_timeout > 0) {
             dim_timeout = -1;
-            backlight_dim(&b, dim);
+            printf("TIME TO DIM\n");
         }
 
         for (i = 0; i < n; ++i) {
@@ -229,130 +244,61 @@ static int run(int timeout, double dim)
 
             if (evt->events & EPOLLERR || evt->events & EPOLLHUP) {
                 close(evt->data.fd);
-            } else if (evt->data.fd == inotify_fd) {
-                inotify_read();
             } else if (evt->data.fd == udev_fd) {
-                int ac;
-                if (udev_power_online(&ac, false)) {
-                    while (ac) {
-                        printf("POOPING\n");
-                        udev_power_online(&ac, true);
-                    }
+                udev_update();
+                printf("POWER STATE CHANGE\n");
+
+                switch (mode) {
+                case AC_ON:
+                    printf("on AC power: BLIGHT: %f\n", states[mode].brightness);
+                    break;
+                case AC_OFF:
+                    printf("on battery power: BLIGHT: %f\n", states[mode].brightness);
+                    break;
                 }
-            } else if (dim_timeout == -1) {
-                dim_timeout = timeout;
-                backlight_dim(&b, 0);
+                backlight_set(&b, states[mode].brightness);
+
+                dim_timeout = states[mode].timeout;
+            } else if (dim_timeout == -1 && cur->timeout != -1) {
+                dim_timeout = cur->timeout;
+                printf("TIME TO UNDIM\n");
             }
         }
     }
-
-    return 0;
 }
 
-static void sighandler(int signum)
+int main(void)
 {
-    switch (signum) {
-    case SIGINT:
-    case SIGTERM:
-        backlight_dim(&b, 0);
-        exit(EXIT_SUCCESS);
-    }
-}
+    init_epoll();
 
-static void __attribute__((__noreturn__)) usage(FILE *out)
-{
-    fprintf(out, "usage: %s [options]\n", program_invocation_short_name);
-    fputs("Options:\n"
-        " -h, --help             display this help and exit\n"
-        " -v, --version          display version\n"
-        " -t, --timeout=TIME     the timeout in seconds to dim after\n"
-        " -d, --dim-by=LEVEL     how much to dim by\n", out);
-
-    exit(out == stderr ? EXIT_FAILURE : EXIT_SUCCESS);
-}
-
-int main(int argc, char *argv[])
-{
-    long timeout = 10, dim = 7;
-    int rc = 0;
-
-    static const struct option opts[] = {
-        { "help",    no_argument,       0, 'h' },
-        { "version", no_argument,       0, 'v' },
-        { "timeout", required_argument, 0, 't' },
-        { "dim-by",  required_argument, 0, 'd' },
-        { 0, 0, 0, 0 }
-    };
-
-    while (true) {
-        int opt = getopt_long(argc, argv, "hvt:d:", opts, NULL);
-        if (opt == -1)
-            break;
-
-        switch (opt) {
-        case 'h':
-            usage(stdout);
-            break;
-        case 'v':
-            printf("%s %s\n", program_invocation_short_name, DIMMER_VERSION);
-            return 0;
-        case 't':
-            if (xstrtol(optarg, &timeout) < 0)
-                errx(EXIT_FAILURE, "invalid timeout: %s", optarg);
-            break;
-        case 'd':
-            if (xstrtol(optarg, &dim) < 0)
-                errx(EXIT_FAILURE, "invalid dim: %s", optarg);
-            break;
-        default:
-            usage(stderr);
-        }
-    }
-
-    epoll_fd = epoll_create1(0);
-    if (epoll_fd < 0)
-        err(EXIT_FAILURE, "failed to start epoll");
-
-    inotify_fd = inotify_init();
-    if (inotify_fd < 0)
-        err(EXIT_FAILURE, "failed to start inotify");
-
-    udev_fd = udev_monitor_init();
-    if (udev_fd < 0)
-        err(EXIT_FAILURE, "failed to start udev");
+    udev = udev_new();
+    if (!udev)
+        err(EXIT_FAILURE, "can't create udev");
 
     if (backlight_find_best(&b) < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");
 
-    signal(SIGTERM, sighandler);
-    signal(SIGINT,  sighandler);
+    udev_enumerate();
 
-    int wd = inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE);
-    if (wd < 0)
-        err(EXIT_FAILURE, "failed to watch /dev/input");
+    switch (mode) {
+    case AC_ON:
+        printf("on AC power: BLIGHT: %f\n", states[mode].brightness);
+        break;
+    case AC_OFF:
+        printf("on battery power: BLIGHT: %f\n", states[mode].brightness);
+        break;
+    }
 
-    struct epoll_event event = {
-        .data.fd = inotify_fd,
-        .events  = EPOLLIN | EPOLLET
-    };
+    mon = udev_monitor_new_from_netlink(udev, "udev");
+    udev_monitor_filter_add_match_subsystem_devtype(mon, "power_supply", NULL);
+    udev_monitor_enable_receiving(mon);
 
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, inotify_fd, &event) < 0)
-        err(EXIT_FAILURE, "failed to add inotify to epoll");
-
-    struct epoll_event event2 = {
-        .data.fd = udev_fd,
-        .events  = EPOLLIN | EPOLLET
-    };
-
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, udev_fd, &event2) < 0)
-        err(EXIT_FAILURE, "failed to add udev to epoll");
+    udev_fd = udev_monitor_get_fd(mon);
+    register_epoll(udev_fd, AC_BOTH);
 
     ev_findall();
-    rc = run(timeout * 1000, dim);
+    run();
 
-    close(epoll_fd);
-    close(udev_fd);
-    return rc;
+    udev_unref(udev);
+    return 0;
 }
-
-// vim: et:sts=4:sw=4:cino=(0
