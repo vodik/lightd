@@ -344,8 +344,6 @@ static void sighandler(int signum)
 
 int main(void)
 {
-    power_mode = -1;
-
     /* TODO: replace with udev code */
     if (backlight_find_best(&b) < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");
