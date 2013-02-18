@@ -37,7 +37,12 @@
 
 #include "backlight.h"
 
-enum power {AC_ON, AC_OFF};
+enum power_state {
+    AC_START = -1,
+    AC_ON,
+    AC_OFF,
+    AC_BOTH
+};
 
 struct power_state_t {
     int epoll_fd;
@@ -46,7 +51,8 @@ struct power_state_t {
     double dim;
 };
 
-static struct power_state_t States[2] = {
+static enum power_state power_mode = AC_START;
+static struct power_state_t States[] = {
     [AC_ON] = {
         .timeout = -1,
         .brightness = 100
@@ -58,16 +64,11 @@ static struct power_state_t States[2] = {
     }
 }, *state = NULL;
 
-#define AC_BOTH -1
-
-static enum power mode = AC_ON;
-
-static int udev_fd, inotify_fd;
+static struct backlight_t b;
+static int power_mon_fd, inotify_fd;
 
 static struct udev *udev;
-static struct udev_monitor *mon;
-
-static struct backlight_t b;
+static struct udev_monitor *power_mon; // *input_mon;
 
 static void backlight_dim(struct backlight_t *b, double dim)
 {
@@ -76,38 +77,38 @@ static void backlight_dim(struct backlight_t *b, double dim)
 }
 
 // EPOLL CRAP {{{1
-static void init_epoll(void)
+static void epoll_init(void)
 {
-    int i;
+    size_t i, len = sizeof(States) / sizeof(States[0]);
 
-    for (i = 0; i < 2; ++i) {
+    for (i = 0; i < len; ++i) {
         States[i].epoll_fd = epoll_create1(0);
-
         if (States[i].epoll_fd < 0)
             err(EXIT_FAILURE, "failed to start epoll");
     }
 }
 
-static void register_epoll(int fd, enum power mode)
+static void register_epoll(int fd, enum power_state power_mode)
 {
     struct epoll_event event = {
         .data.fd = fd,
         .events  = EPOLLIN | EPOLLET
     };
 
-    if ((mode == AC_OFF || mode == AC_BOTH) &&
+    if ((power_mode == AC_OFF || power_mode == AC_BOTH) &&
         (epoll_ctl(States[AC_OFF].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
         err(EXIT_FAILURE, "failed to add udev monitor to epoll");
 
-    if ((mode == AC_ON || mode == AC_BOTH) &&
+    if ((power_mode == AC_ON || power_mode == AC_BOTH) &&
         (epoll_ctl(States[AC_ON].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
         err(EXIT_FAILURE, "failed to add udev monitor to epoll");
 }
 // }}}
 
-static bool power_status(struct udev_device *dev, bool save)
+// {{{1 UDEV MAGIC
+static bool update_power_state(struct udev_device *dev, bool save)
 {
-    enum power next = mode;
+    enum power_state next = power_mode;
 
     const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
     if (!online)
@@ -118,19 +119,18 @@ static bool power_status(struct udev_device *dev, bool save)
     else if (strcmp("0", online) == 0)
         next = AC_OFF;
 
-    if (next != mode) {
+    if (next != power_mode) {
         if (save)
             state->brightness = backlight_get(&b);
         state = &States[next];
         backlight_set(&b, state->brightness);
     }
 
-    mode = next;
+    power_mode = next;
     return true;
 }
 
-// {{{1 UDEV MAGIC
-static void udev_enumerate(void)
+static void udev_init_power(void)
 {
     struct udev_list_entry *devices, *dev_list_entry;
     struct udev_enumerate *enumerate = udev_enumerate_new(udev);
@@ -143,8 +143,9 @@ static void udev_enumerate(void)
         const char *path = udev_list_entry_get_name(dev_list_entry);
         struct udev_device *dev = udev_device_new_from_syspath(udev, path);
 
-        if (power_status(dev, false)) {
+        if (update_power_state(dev, false)) {
             udev_device_unref(dev);
+            state = &States[power_mode];
             break;
         }
 
@@ -152,17 +153,35 @@ static void udev_enumerate(void)
     }
 
     udev_enumerate_unref(enumerate);
+
+    power_mon = udev_monitor_new_from_netlink(udev, "udev");
+    udev_monitor_filter_add_match_subsystem_devtype(power_mon, "power_supply", NULL);
+    udev_monitor_enable_receiving(power_mon);
+
+    power_mon_fd = udev_monitor_get_fd(power_mon);
+    register_epoll(power_mon_fd, AC_BOTH);
 }
 
-static bool udev_update(bool save)
+static bool udev_monitor_power(bool save)
 {
-    struct udev_device *dev = udev_monitor_receive_device(mon);
-    bool rc = power_status(dev, save);
+    bool rc = false;
 
-    udev_device_unref(dev);
+    while (true) {
+        struct udev_device *dev = udev_monitor_receive_device(power_mon);
+        if (!dev) {
+            if (errno == EAGAIN)
+                break;
+            err(EXIT_FAILURE, "FUCK!");
+        }
+
+        rc |= update_power_state(dev, save);
+        udev_device_unref(dev);
+    }
+
     return rc;
 }
 
+// TODO: remove this crap */
 static void ev_findall(void);
 
 static void udev_init(void)
@@ -174,15 +193,7 @@ static void udev_init(void)
     /* TODO: replace with udev code */
     ev_findall();
 
-    udev_enumerate();
-    state = &States[mode];
-
-    mon = udev_monitor_new_from_netlink(udev, "udev");
-    udev_monitor_filter_add_match_subsystem_devtype(mon, "power_supply", NULL);
-    udev_monitor_enable_receiving(mon);
-
-    udev_fd = udev_monitor_get_fd(mon);
-    register_epoll(udev_fd, AC_BOTH);
+    udev_init_power();
 }
 // }}}
 
@@ -258,7 +269,7 @@ static void notify_init(void)
     if (wd < 0)
         err(EXIT_FAILURE, "failed to watch /dev/input");
 
-    register_epoll(inotify_fd, -1);
+    register_epoll(inotify_fd, AC_BOTH);
 }
 
 static void inotify_read(void)
@@ -319,7 +330,7 @@ static int loop()
                 close(evt->data.fd);
             } else if (evt->data.fd == inotify_fd) {
                 inotify_read();
-            } else if (evt->data.fd == udev_fd && udev_update(save)) {
+            } else if (evt->data.fd == power_mon_fd && udev_monitor_power(save)) {
                 dim_timeout = state->timeout;
             } else if (dim_timeout == -1 && state->timeout != -1) {
                 dim_timeout = state->timeout;
@@ -341,13 +352,13 @@ static void sighandler(int signum)
 
 int main(void)
 {
-    mode = -1;
+    power_mode = -1;
 
     /* TODO: replace with udev code */
     if (backlight_find_best(&b) < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");
 
-    init_epoll();
+    epoll_init();
     udev_init();
     notify_init();
 
