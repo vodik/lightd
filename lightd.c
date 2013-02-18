@@ -202,10 +202,16 @@ static void udev_init_power(void)
     register_epoll(power_mon_fd, AC_BOTH);
 }
 
-static void udev_adddevice(struct udev_device *dev)
+static void udev_adddevice(struct udev_device *dev, bool enumerating)
 {
     bool interesting = false;
+
     const char *devnode = udev_device_get_devnode(dev);
+    const char *action  = udev_device_get_action(dev);
+
+    // TODO: i don't handle remove actions :(
+    if (!enumerating && strcmp("add", action) != 0)
+        return;
 
     interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_KEYBOARD");
     interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_MOUSE");
@@ -231,7 +237,7 @@ static void udev_init_input(void)
         const char *path = udev_list_entry_get_name(dev_list_entry);
         struct udev_device *dev = udev_device_new_from_syspath(udev, path);
 
-        udev_adddevice(dev);
+        udev_adddevice(dev, true);
         udev_device_unref(dev);
     }
 
@@ -275,7 +281,7 @@ static void udev_monitor_input(void)
             err(EXIT_FAILURE, "FUCK!");
         }
 
-        udev_adddevice(dev);
+        udev_adddevice(dev, false);
         udev_device_unref(dev);
     }
 }
