@@ -154,10 +154,16 @@ static bool update_power_state(struct udev_device *dev, bool save)
     if (!online)
         return false;
 
-    if (strcmp("1", online) == 0)
+    switch (online[0]) {
+    case '1':
         next = AC_ON;
-    else if (strcmp("0", online) == 0)
+        break;
+    case '0':
         next = AC_OFF;
+        break;
+    default:
+        break;
+    }
 
     if (next != power_mode) {
         if (save)
