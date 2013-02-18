@@ -32,7 +32,6 @@
 #include <libudev.h>
 #include <sys/types.h>
 #include <sys/epoll.h>
-#include <sys/inotify.h>
 #include <linux/input.h>
 
 #include "backlight.h"
@@ -65,10 +64,10 @@ static struct power_state_t States[] = {
 }, *state = NULL;
 
 static struct backlight_t b;
-static int power_mon_fd, inotify_fd;
+static int power_mon_fd, input_mon_fd;
 
 static struct udev *udev;
-static struct udev_monitor *power_mon; // *input_mon;
+static struct udev_monitor *power_mon, *input_mon;
 
 static void backlight_dim(struct backlight_t *b, double dim)
 {
@@ -102,6 +101,47 @@ static void register_epoll(int fd, enum power_state power_mode)
     if ((power_mode == AC_ON || power_mode == AC_BOTH) &&
         (epoll_ctl(States[AC_ON].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
         err(EXIT_FAILURE, "failed to add udev monitor to epoll");
+}
+// }}}
+
+// {{{1 EVDEV INPUT
+static uint8_t bit(int bit, const uint8_t array[static (EV_MAX + 7) / 8])
+{
+    return array[bit / 8] & (1 << (bit % 8));
+}
+
+static int ev_adddevice(const filepath_t path)
+{
+    int rc = 0;
+    char name[256];
+    uint8_t evtype_bitmask[(EV_MAX + 7) / 8];
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        err(EXIT_FAILURE, "failed to open evdev device %s", path);
+
+    rc = ioctl(fd, EVIOCGBIT(0, EV_MAX), evtype_bitmask);
+    if (rc < 0)
+        goto cleanup;
+
+    rc  = bit(EV_KEY, evtype_bitmask);
+    rc |= bit(EV_REL, evtype_bitmask);
+    rc |= bit(EV_ABS, evtype_bitmask);
+    if (!rc)
+        goto cleanup;
+
+    rc = ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+    if (rc < 0)
+        goto cleanup;
+
+    printf("Monitoring device %s: %s\n", name, path);
+    register_epoll(fd, AC_OFF);
+
+cleanup:
+    if (rc <= 0)
+        close(fd);
+
+    return rc;
 }
 // }}}
 
@@ -162,6 +202,50 @@ static void udev_init_power(void)
     register_epoll(power_mon_fd, AC_BOTH);
 }
 
+static void udev_adddevice(struct udev_device *dev)
+{
+    bool interesting = false;
+    const char *devnode = udev_device_get_devnode(dev);
+
+    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_KEYBOARD");
+    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_MOUSE");
+    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_TOUCHPAD");
+    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_TABLET");
+    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_JOYSTICK");
+
+    if (interesting && devnode)
+        ev_adddevice(devnode);
+}
+
+static void udev_init_input(void)
+{
+    struct udev_list_entry *devices, *dev_list_entry;
+    struct udev_enumerate *enumerate = udev_enumerate_new(udev);
+
+    udev_enumerate_add_match_subsystem(enumerate, "input");
+    udev_enumerate_scan_devices(enumerate);
+    devices = udev_enumerate_get_list_entry(enumerate);
+
+    /* TODO: This is enumerating input/js*, input/mouse*..., lame */
+    udev_list_entry_foreach(dev_list_entry, devices) {
+        const char *path = udev_list_entry_get_name(dev_list_entry);
+        struct udev_device *dev = udev_device_new_from_syspath(udev, path);
+
+        udev_adddevice(dev);
+        udev_device_unref(dev);
+    }
+
+    udev_enumerate_unref(enumerate);
+
+    input_mon = udev_monitor_new_from_netlink(udev, "udev");
+    udev_monitor_filter_add_match_subsystem_devtype(input_mon, "input", NULL);
+    udev_monitor_enable_receiving(input_mon);
+
+    input_mon_fd = udev_monitor_get_fd(input_mon);
+    printf("input_mon_fd: %d\n", input_mon_fd);
+    register_epoll(input_mon_fd, AC_BOTH);
+}
+
 static bool udev_monitor_power(bool save)
 {
     bool rc = false;
@@ -181,8 +265,20 @@ static bool udev_monitor_power(bool save)
     return rc;
 }
 
-// TODO: remove this crap */
-static void ev_findall(void);
+static void udev_monitor_input(void)
+{
+    while (true) {
+        struct udev_device *dev = udev_monitor_receive_device(input_mon);
+        if (!dev) {
+            if (errno == EAGAIN)
+                break;
+            err(EXIT_FAILURE, "FUCK!");
+        }
+
+        udev_adddevice(dev);
+        udev_device_unref(dev);
+    }
+}
 
 static void udev_init(void)
 {
@@ -190,120 +286,10 @@ static void udev_init(void)
     if (!udev)
         err(EXIT_FAILURE, "can't create udev");
 
-    /* TODO: replace with udev code */
-    ev_findall();
-
     udev_init_power();
+    udev_init_input();
 }
 // }}}
-
-// {{{1 EVDEV INPUT
-static uint8_t bit(int bit, const uint8_t array[static (EV_MAX + 7) / 8])
-{
-    return array[bit / 8] & (1 << (bit % 8));
-}
-
-static int ev_adddevice(filepath_t path)
-{
-    int rc = 0;
-    char name[256];
-    uint8_t evtype_bitmask[(EV_MAX + 7) / 8];
-
-    int fd = open(path, O_RDONLY);
-    if (fd < 0)
-        err(EXIT_FAILURE, "failed to open evdev device %s", path);
-
-    rc = ioctl(fd, EVIOCGBIT(0, EV_MAX), evtype_bitmask);
-    if (rc < 0)
-        goto cleanup;
-
-    rc  = bit(EV_KEY, evtype_bitmask);
-    rc |= bit(EV_REL, evtype_bitmask);
-    rc |= bit(EV_ABS, evtype_bitmask);
-    if (!rc)
-        goto cleanup;
-
-    rc = ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-    if (rc < 0)
-        goto cleanup;
-
-    printf("Monitoring device %s: %s\n", name, path);
-    register_epoll(fd, AC_OFF);
-
-cleanup:
-    if (rc <= 0)
-        close(fd);
-
-    return rc;
-}
-// }}}
-
-// {{{1 TO STRIP OUT
-static void ev_findall(void)
-{
-    filepath_t path;
-    struct dirent *dp;
-    DIR *dir = opendir("/dev/input");
-
-    if (dir == NULL)
-        err(EXIT_FAILURE, "failed to open directory");
-
-    while ((dp = readdir(dir))) {
-        if (dp->d_type & DT_CHR && strcmp("event", dp->d_name)) {
-            snprintf(path, PATH_MAX, "/dev/input/%s", dp->d_name);
-            ev_adddevice(path);
-        }
-    }
-
-    closedir(dir);
-}
-
-// INOTIFY GARBAGE {{{2
-static void notify_init(void)
-{
-   inotify_fd = inotify_init();
-    if (inotify_fd < 0)
-        err(EXIT_FAILURE, "failed to start inotify");
-
-    int wd = inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE);
-    if (wd < 0)
-        err(EXIT_FAILURE, "failed to watch /dev/input");
-
-    register_epoll(inotify_fd, AC_BOTH);
-}
-
-static void inotify_read(void)
-{
-    filepath_t path;
-    uint8_t buf[1024 * (sizeof(struct inotify_event) + 16)];
-    int nread, i = 0;
-
-    while (true) {
-        nread = read(inotify_fd, buf, sizeof(buf));
-        if (nread < 0) {
-            if (errno != EAGAIN) {
-                err(EXIT_FAILURE, "failed to read inotify data");
-                break;
-            }
-        } else
-            break;
-    }
-
-    while (i < nread) {
-        struct inotify_event *event = (struct inotify_event *)&buf[i];
-
-        if (!event->len)
-            continue;
-
-        if (event->mask & IN_CREATE) {
-            snprintf(path, PATH_MAX, "/dev/input/%s", event->name);
-            ev_adddevice(path);
-        }
-
-        i += sizeof(struct inotify_event) + event->len;
-    }
-}
-// }}} }}}
 
 static int loop()
 {
@@ -328,8 +314,8 @@ static int loop()
 
             if (evt->events & EPOLLERR || evt->events & EPOLLHUP) {
                 close(evt->data.fd);
-            } else if (evt->data.fd == inotify_fd) {
-                inotify_read();
+            } else if (evt->data.fd == input_mon_fd) {
+                udev_monitor_input();
             } else if (evt->data.fd == power_mon_fd && udev_monitor_power(save)) {
                 dim_timeout = state->timeout;
             } else if (dim_timeout == -1 && state->timeout != -1) {
@@ -360,7 +346,6 @@ int main(void)
 
     epoll_init();
     udev_init();
-    notify_init();
 
     signal(SIGTERM, sighandler);
     signal(SIGINT,  sighandler);
