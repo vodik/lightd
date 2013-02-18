@@ -31,7 +31,7 @@ static int get(filepath_t path, long *value)
 {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        warn("failed to open %s", path);
+        warn("failed to open to read to backlight %s", path);
         return -1;
     }
 
@@ -54,7 +54,7 @@ static int set(filepath_t path, long value)
 {
     int fd = open(path, O_WRONLY);
     if (fd < 0) {
-        warn("failed to open %s", path);
+        warn("failed to open to write to backlight %s", path);
         return -1;
     }
 

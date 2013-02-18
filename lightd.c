@@ -162,6 +162,28 @@ static bool udev_update(bool save)
     udev_device_unref(dev);
     return rc;
 }
+
+static void ev_findall(void);
+
+static void udev_init(void)
+{
+    udev = udev_new();
+    if (!udev)
+        err(EXIT_FAILURE, "can't create udev");
+
+    /* TODO: replace with udev code */
+    ev_findall();
+
+    udev_enumerate();
+    state = &States[mode];
+
+    mon = udev_monitor_new_from_netlink(udev, "udev");
+    udev_monitor_filter_add_match_subsystem_devtype(mon, "power_supply", NULL);
+    udev_monitor_enable_receiving(mon);
+
+    udev_fd = udev_monitor_get_fd(mon);
+    register_epoll(udev_fd, AC_BOTH);
+}
 // }}}
 
 // {{{1 EVDEV INPUT
@@ -178,7 +200,7 @@ static int ev_adddevice(filepath_t path)
 
     int fd = open(path, O_RDONLY);
     if (fd < 0)
-        err(EXIT_FAILURE, "failed to open %s", path);
+        err(EXIT_FAILURE, "failed to open evdev device %s", path);
 
     rc = ioctl(fd, EVIOCGBIT(0, EV_MAX), evtype_bitmask);
     if (rc < 0)
@@ -203,7 +225,9 @@ cleanup:
 
     return rc;
 }
+// }}}
 
+// {{{1 TO STRIP OUT
 static void ev_findall(void)
 {
     filepath_t path;
@@ -222,9 +246,8 @@ static void ev_findall(void)
 
     closedir(dir);
 }
-// }}}
 
-// INOTIFY GARBAGE {{{1
+// INOTIFY GARBAGE {{{2
 static void notify_init(void)
 {
    inotify_fd = inotify_init();
@@ -269,14 +292,12 @@ static void inotify_read(void)
         i += sizeof(struct inotify_event) + event->len;
     }
 }
-// }}}
+// }}} }}}
 
-static int run()
+static int loop()
 {
     struct epoll_event events[64];
     int dim_timeout = state->timeout;
-
-    ev_findall();
 
     while (true) {
         int i, n = epoll_wait(state->epoll_fd, events, 64, dim_timeout);
@@ -321,40 +342,19 @@ static void sighandler(int signum)
 int main(void)
 {
     mode = -1;
-    init_epoll();
 
-    udev = udev_new();
-    if (!udev)
-        err(EXIT_FAILURE, "can't create udev");
-
+    /* TODO: replace with udev code */
     if (backlight_find_best(&b) < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");
 
-    udev_enumerate();
-    state = &States[mode];
-
-    switch (mode) {
-    case AC_ON:
-        printf("on AC power: BLIGHT: %f\n", state->brightness);
-        break;
-    case AC_OFF:
-        printf("on battery power: BLIGHT: %f\n", state->brightness);
-        break;
-    }
-
-    mon = udev_monitor_new_from_netlink(udev, "udev");
-    udev_monitor_filter_add_match_subsystem_devtype(mon, "power_supply", NULL);
-    udev_monitor_enable_receiving(mon);
-
-    udev_fd = udev_monitor_get_fd(mon);
-    register_epoll(udev_fd, AC_BOTH);
-
+    init_epoll();
+    udev_init();
     notify_init();
 
     signal(SIGTERM, sighandler);
     signal(SIGINT,  sighandler);
 
-    run();
+    loop();
 
     udev_unref(udev);
     return 0;
