@@ -69,11 +69,6 @@ static struct udev_monitor *mon;
 
 static struct backlight_t b;
 
-static uint8_t bit(int bit, const uint8_t *array)
-{
-    return array[bit / 8] & (1 << (bit % 8));
-}
-
 static void backlight_dim(struct backlight_t *b, double dim)
 {
     state->brightness = backlight_get(b);
@@ -110,9 +105,13 @@ static void register_epoll(int fd, enum power mode)
 }
 // }}}
 
-static void power_status(const char *online, bool save)
+static bool power_status(struct udev_device *dev, bool save)
 {
     enum power next = mode;
+
+    const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
+    if (!online)
+        return false;
 
     if (strcmp("1", online) == 0)
         next = AC_ON;
@@ -127,26 +126,24 @@ static void power_status(const char *online, bool save)
     }
 
     mode = next;
+    return true;
 }
 
 // {{{1 UDEV MAGIC
 static void udev_enumerate(void)
 {
     struct udev_list_entry *devices, *dev_list_entry;
-    struct udev_device *dev;
-
     struct udev_enumerate *enumerate = udev_enumerate_new(udev);
+
     udev_enumerate_add_match_subsystem(enumerate, "power_supply");
     udev_enumerate_scan_devices(enumerate);
     devices = udev_enumerate_get_list_entry(enumerate);
 
     udev_list_entry_foreach(dev_list_entry, devices) {
         const char *path = udev_list_entry_get_name(dev_list_entry);
-        dev = udev_device_new_from_syspath(udev, path);
+        struct udev_device *dev = udev_device_new_from_syspath(udev, path);
 
-        const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
-        if (online) {
-            power_status(online, false);
+        if (power_status(dev, false)) {
             udev_device_unref(dev);
             break;
         }
@@ -160,23 +157,19 @@ static void udev_enumerate(void)
 static bool udev_update(bool save)
 {
     struct udev_device *dev = udev_monitor_receive_device(mon);
-    int rc = false;
+    bool rc = power_status(dev, save);
 
-    if (dev) {
-        const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
-        if (online) {
-            power_status(online, save);
-            rc = true;
-        }
-
-        udev_device_unref(dev);
-    }
-
+    udev_device_unref(dev);
     return rc;
 }
 // }}}
 
 // {{{1 EVDEV INPUT
+static uint8_t bit(int bit, const uint8_t array[static (EV_MAX + 7) / 8])
+{
+    return array[bit / 8] & (1 << (bit % 8));
+}
+
 static int ev_adddevice(filepath_t path)
 {
     int rc = 0;
