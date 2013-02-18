@@ -39,13 +39,11 @@
 
 enum power {AC_ON, AC_OFF};
 
-typedef void (* handler_fn)(int fd);
-
 struct power_state_t {
     int epoll_fd;
     int timeout;
     double brightness;
-    /* handler_fn handle_udev; */
+    double dim;
 };
 
 static struct power_state_t States[2] = {
@@ -54,8 +52,9 @@ static struct power_state_t States[2] = {
         .brightness = 100
     },
     [AC_OFF] = {
-        .timeout = 5 * 1000,
-        .brightness = 5
+        .timeout = 2 * 1000,
+        .brightness = 35,
+        .dim = 20
     }
 }, *state = NULL;
 
@@ -63,7 +62,7 @@ static struct power_state_t States[2] = {
 
 static enum power mode = AC_ON;
 
-static int udev_fd;
+static int udev_fd, inotify_fd;
 
 static struct udev *udev;
 static struct udev_monitor *mon;
@@ -75,17 +74,11 @@ static uint8_t bit(int bit, const uint8_t *array)
     return array[bit / 8] & (1 << (bit % 8));
 }
 
-/* static void backlight_dim(struct backlight_t *b, double dim) */
-/* { */
-/*     double v = backlight_get(b); */
-
-/*     if (dim) */
-/*         backlight_set(b, CLAMP(v - dim, 1.5, 100)); */
-/*     else if (blight > v) */
-/*         backlight_set(b, blight); */
-
-/*     blight = v; */
-/* } */
+static void backlight_dim(struct backlight_t *b, double dim)
+{
+    state->brightness = backlight_get(b);
+    backlight_set(b, CLAMP(state->brightness - dim, 1.5, 100));
+}
 
 // EPOLL CRAP {{{1
 static void init_epoll(void)
@@ -117,7 +110,7 @@ static void register_epoll(int fd, enum power mode)
 }
 // }}}
 
-static void power_status(const char *online)
+static void power_status(const char *online, bool save)
 {
     enum power next = mode;
 
@@ -127,8 +120,10 @@ static void power_status(const char *online)
         next = AC_OFF;
 
     if (next != mode) {
-        printf("STATE CHANGE HERE\n");
+        if (save)
+            state->brightness = backlight_get(&b);
         state = &States[next];
+        backlight_set(&b, state->brightness);
     }
 
     mode = next;
@@ -151,7 +146,7 @@ static void udev_enumerate(void)
 
         const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
         if (online) {
-            power_status(online);
+            power_status(online, false);
             udev_device_unref(dev);
             break;
         }
@@ -162,17 +157,22 @@ static void udev_enumerate(void)
     udev_enumerate_unref(enumerate);
 }
 
-static void udev_update(void)
+static bool udev_update(bool save)
 {
     struct udev_device *dev = udev_monitor_receive_device(mon);
+    int rc = false;
 
     if (dev) {
         const char *online = udev_device_get_property_value(dev, "POWER_SUPPLY_ONLINE");
-        if (online)
-            power_status(online);
+        if (online) {
+            power_status(online, save);
+            rc = true;
+        }
 
         udev_device_unref(dev);
     }
+
+    return rc;
 }
 // }}}
 
@@ -231,14 +231,63 @@ static void ev_findall(void)
 }
 // }}}
 
+// INOTIFY GARBAGE {{{1
+static void notify_init(void)
+{
+   inotify_fd = inotify_init();
+    if (inotify_fd < 0)
+        err(EXIT_FAILURE, "failed to start inotify");
+
+    int wd = inotify_add_watch(inotify_fd, "/dev/input", IN_CREATE);
+    if (wd < 0)
+        err(EXIT_FAILURE, "failed to watch /dev/input");
+
+    register_epoll(inotify_fd, -1);
+}
+
+static void inotify_read(void)
+{
+    filepath_t path;
+    uint8_t buf[1024 * (sizeof(struct inotify_event) + 16)];
+    int nread, i = 0;
+
+    while (true) {
+        nread = read(inotify_fd, buf, sizeof(buf));
+        if (nread < 0) {
+            if (errno != EAGAIN) {
+                err(EXIT_FAILURE, "failed to read inotify data");
+                break;
+            }
+        } else
+            break;
+    }
+
+    while (i < nread) {
+        struct inotify_event *event = (struct inotify_event *)&buf[i];
+
+        if (!event->len)
+            continue;
+
+        if (event->mask & IN_CREATE) {
+            snprintf(path, PATH_MAX, "/dev/input/%s", event->name);
+            ev_adddevice(path);
+        }
+
+        i += sizeof(struct inotify_event) + event->len;
+    }
+}
+// }}}
+
 static int run()
 {
     struct epoll_event events[64];
     int dim_timeout = state->timeout;
 
+    ev_findall();
+
     while (true) {
-        printf("waiting with timeout: %d\n", dim_timeout);
         int i, n = epoll_wait(state->epoll_fd, events, 64, dim_timeout);
+        bool save = state->dim == 0 || (state->dim > 0 && dim_timeout != -1);
 
         if (n < 0) {
             if (errno == EINTR)
@@ -246,7 +295,7 @@ static int run()
             err(EXIT_FAILURE, "epoll_wait failed");
         } else if (n == 0 && dim_timeout > 0) {
             dim_timeout = -1;
-            printf("TIME TO DIM\n");
+            backlight_dim(&b, state->dim);
         }
 
         for (i = 0; i < n; ++i) {
@@ -254,31 +303,31 @@ static int run()
 
             if (evt->events & EPOLLERR || evt->events & EPOLLHUP) {
                 close(evt->data.fd);
-            } else if (evt->data.fd == udev_fd) {
-                udev_update();
-                printf("POWER STATE CHANGE\n");
-
-                switch (mode) {
-                case AC_ON:
-                    printf("on AC power: BLIGHT: %f\n", state->brightness);
-                    break;
-                case AC_OFF:
-                    printf("on battery power: BLIGHT: %f\n", state->brightness);
-                    break;
-                }
-                backlight_set(&b, state->brightness);
-
+            } else if (evt->data.fd == inotify_fd) {
+                inotify_read();
+            } else if (evt->data.fd == udev_fd && udev_update(save)) {
                 dim_timeout = state->timeout;
             } else if (dim_timeout == -1 && state->timeout != -1) {
                 dim_timeout = state->timeout;
-                printf("TIME TO UNDIM\n");
+                backlight_set(&b, state->brightness);
             }
         }
     }
 }
 
+static void sighandler(int signum)
+{
+    switch (signum) {
+    case SIGINT:
+    case SIGTERM:
+        backlight_set(&b, 100);
+        exit(EXIT_SUCCESS);
+    }
+}
+
 int main(void)
 {
+    mode = -1;
     init_epoll();
 
     udev = udev_new();
@@ -307,7 +356,11 @@ int main(void)
     udev_fd = udev_monitor_get_fd(mon);
     register_epoll(udev_fd, AC_BOTH);
 
-    ev_findall();
+    notify_init();
+
+    signal(SIGTERM, sighandler);
+    signal(SIGINT,  sighandler);
+
     run();
 
     udev_unref(udev);
