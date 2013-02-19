@@ -81,7 +81,6 @@ int backlight_init(struct backlight_t *b, const char *device)
 
 int backlight_set(struct backlight_t *b, double value)
 {
-    printf("SETTING: %0.2f\n", value);
     value = CLAMP(value, 0.0, 100.0) / 100.0 * (double)b->max;
     return set(b->dev, (int)(value + 0.5));
 }

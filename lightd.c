@@ -156,13 +156,15 @@ static bool update_power_state(struct udev_device *dev, bool save)
 
     switch (online[0]) {
     case '1':
+        printf("Using AC power profile...\n");
         next = AC_ON;
         break;
     case '0':
+        printf("Using batter power profile...\n");
         next = AC_OFF;
         break;
     default:
-        break;
+        return false;
     }
 
     if (next != power_mode) {
@@ -254,7 +256,6 @@ static void udev_init_input(void)
     udev_monitor_enable_receiving(input_mon);
 
     input_mon_fd = udev_monitor_get_fd(input_mon);
-    printf("input_mon_fd: %d\n", input_mon_fd);
     register_epoll(input_mon_fd, AC_BOTH);
 }
 
