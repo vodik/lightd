@@ -209,6 +209,7 @@ static bool update_power_state(struct udev_device *dev, bool save)
     default:
         return false;
     }
+    fflush(stdout);
 
     if (next != power_mode) {
         if (save)
