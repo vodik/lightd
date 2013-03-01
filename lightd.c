@@ -282,7 +282,6 @@ static void udev_adddevice(struct udev_device *dev, bool enumerating)
     } else if (strcmp("remove", action) == 0) {
         unregister_device(devnode);
     }
-
 }
 
 static void udev_init_input(void)

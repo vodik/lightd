@@ -1,8 +1,8 @@
 [Unit]
-Description=A simple backlight dimmer
+Description=A simple backlight daemon
 
 [Service]
-ExecStart=/usr/bin/dimmer
+ExecStart=/usr/bin/lightd
 StandardOutput=syslog
 StandardError=syslog
 
