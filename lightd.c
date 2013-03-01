@@ -322,7 +322,7 @@ static bool udev_monitor_power(bool save)
         if (!dev) {
             if (errno == EAGAIN)
                 break;
-            err(EXIT_FAILURE, "FUCK!");
+            err(EXIT_FAILURE, "failed to recieve power device");
         }
 
         rc |= update_power_state(dev, save);
@@ -339,7 +339,7 @@ static void udev_monitor_input(void)
         if (!dev) {
             if (errno == EAGAIN)
                 break;
-            err(EXIT_FAILURE, "FUCK!");
+            err(EXIT_FAILURE, "failed to recieve input device");
         }
 
         udev_adddevice(dev, false);
