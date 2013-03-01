@@ -393,16 +393,8 @@ static int loop()
             }
         }
     }
-}
 
-static void sighandler(int signum)
-{
-    switch (signum) {
-    case SIGINT:
-    case SIGTERM:
-        backlight_set(&b, 100);
-        exit(EXIT_SUCCESS);
-    }
+    return 0;
 }
 
 int main(void)
@@ -414,13 +406,7 @@ int main(void)
     epoll_init();
     udev_init();
 
-    signal(SIGTERM, sighandler);
-    signal(SIGINT,  sighandler);
-
-    loop();
-
-    udev_unref(udev);
-    return 0;
+    return loop();
 }
 
 // vim: et:sts=4:sw=4:cino=(0
