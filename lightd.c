@@ -160,9 +160,6 @@ static int ev_open(const filepath_t devnode, const char **n)
     uint8_t evtype_bitmask[(EV_MAX + 7) / 8];
     static char name[256];
 
-    if (n)
-        *n = name;
-
     int fd = open(devnode, O_RDONLY);
     if (fd < 0)
         err(EXIT_FAILURE, "failed to open evdev device %s", devnode);
@@ -177,7 +174,10 @@ static int ev_open(const filepath_t devnode, const char **n)
     if (!rc)
         goto cleanup;
 
-    rc = ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+    if (n) {
+        *n = name;
+        rc = ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+    }
 
 cleanup:
     if (rc <= 0) {
@@ -277,6 +277,8 @@ static void udev_adddevice(struct udev_device *dev, bool enumerating)
             return;
 
         printf("Monitoring device %s: %s\n", name, devnode);
+        fflush(stdout);
+
         register_device(devnode, fd);
         register_epoll(fd, power_mode);
     } else if (strcmp("remove", action) == 0) {
