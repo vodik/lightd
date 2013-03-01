@@ -50,6 +50,15 @@ struct power_state_t {
     double dim;
 };
 
+struct fd_data_t {
+    int fd;
+    char *devnode;
+    struct fd_data_t *next;
+    struct fd_data_t *prev;
+};
+
+struct fd_data_t *head = NULL;
+
 static enum power_state power_mode = AC_START;
 static struct power_state_t States[] = {
     [AC_ON] = {
@@ -104,21 +113,59 @@ static void register_epoll(int fd, enum power_state power_mode)
 }
 // }}}
 
+static void register_device(const char *devnode, int fd)
+{
+    struct fd_data_t *node = malloc(sizeof(struct fd_data_t));
+    node->fd = fd;
+    node->devnode = strdup(devnode);
+    node->next = head;
+    node->prev = NULL;
+
+    if (head)
+        head->prev = node;
+    head = node;
+}
+
+static void unregister_device(const char *devnode)
+{
+    struct fd_data_t *node;
+
+    for (node = head; node; node = node->next) {
+        if (strcmp(node->devnode, devnode) == 0) {
+            free(node->devnode);
+            close(node->fd);
+
+            if (node == head) {
+                head = node->next;
+                head->prev = NULL;
+            } else {
+                node->prev->next = node->next;
+                if (node->next)
+                    node->next->prev = node->prev;
+            }
+            free(node);
+        }
+    }
+}
+
 // {{{1 EVDEV INPUT
 static uint8_t bit(int bit, const uint8_t array[static (EV_MAX + 7) / 8])
 {
     return array[bit / 8] & (1 << (bit % 8));
 }
 
-static int ev_adddevice(const filepath_t path)
+static int ev_open(const filepath_t devnode, const char **n)
 {
     int rc = 0;
-    char name[256];
     uint8_t evtype_bitmask[(EV_MAX + 7) / 8];
+    static char name[256];
 
-    int fd = open(path, O_RDONLY);
+    if (n)
+        *n = name;
+
+    int fd = open(devnode, O_RDONLY);
     if (fd < 0)
-        err(EXIT_FAILURE, "failed to open evdev device %s", path);
+        err(EXIT_FAILURE, "failed to open evdev device %s", devnode);
 
     rc = ioctl(fd, EVIOCGBIT(0, EV_MAX), evtype_bitmask);
     if (rc < 0)
@@ -131,17 +178,13 @@ static int ev_adddevice(const filepath_t path)
         goto cleanup;
 
     rc = ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-    if (rc < 0)
-        goto cleanup;
-
-    printf("Monitoring device %s: %s\n", name, path);
-    register_epoll(fd, AC_OFF);
 
 cleanup:
-    if (rc <= 0)
+    if (rc <= 0) {
         close(fd);
-
-    return rc;
+        return -1;
+    }
+    return fd;
 }
 // }}}
 
@@ -212,23 +255,34 @@ static void udev_init_power(void)
 
 static void udev_adddevice(struct udev_device *dev, bool enumerating)
 {
-    bool interesting = false;
-
     const char *devnode = udev_device_get_devnode(dev);
     const char *action  = udev_device_get_action(dev);
+    const char *name = NULL;
 
-    // TODO: i don't handle remove actions :(
-    if (!enumerating && strcmp("add", action) != 0)
+    /* check there's an entry in /dev/... */
+    if (!devnode)
         return;
 
-    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_KEYBOARD");
-    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_MOUSE");
-    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_TOUCHPAD");
-    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_TABLET");
-    interesting |= !!udev_device_get_property_value(dev, "ID_INPUT_JOYSTICK");
+    /* if we aren't enumerating, check there's an action */
+    if (!enumerating && !action)
+        return;
 
-    if (interesting && devnode)
-        ev_adddevice(devnode);
+    /* check if device has ID_INPUT */
+    if (udev_device_get_property_value(dev, "ID_INPUT") == NULL)
+        return;
+
+    if (enumerating || strcmp("add", action) == 0) {
+        int fd = ev_open(devnode, &name);
+        if (fd < 0)
+            return;
+
+        printf("Monitoring device %s: %s\n", name, devnode);
+        register_device(devnode, fd);
+        register_epoll(fd, power_mode);
+    } else if (strcmp("remove", action) == 0) {
+        unregister_device(devnode);
+    }
+
 }
 
 static void udev_init_input(void)
