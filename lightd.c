@@ -201,7 +201,7 @@ static bool update_power_state(struct udev_device *dev, bool save)
         next = AC_ON;
         break;
     case '0':
-        printf("Using batter power profile...\n");
+        printf("Using battery profile...\n");
         next = AC_OFF;
         break;
     default:
