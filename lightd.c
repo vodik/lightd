@@ -25,7 +25,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
-#include <signal.h>
 #include <errno.h>
 #include <err.h>
 
@@ -57,8 +56,6 @@ struct fd_data_t {
     struct fd_data_t *prev;
 };
 
-struct fd_data_t *head = NULL;
-
 static enum power_state power_mode = AC_START;
 static struct power_state_t States[] = {
     [AC_ON] = {
@@ -72,6 +69,7 @@ static struct power_state_t States[] = {
     }
 }, *state = NULL;
 
+static struct fd_data_t *head = NULL;
 static struct backlight_t b;
 static int power_mon_fd, input_mon_fd;
 
@@ -83,35 +81,6 @@ static void backlight_dim(struct backlight_t *b, double dim)
     state->brightness = backlight_get(b);
     backlight_set(b, CLAMP(state->brightness - dim, 1.5, 100));
 }
-
-// EPOLL CRAP {{{1
-static void epoll_init(void)
-{
-    size_t i, len = sizeof(States) / sizeof(States[0]);
-
-    for (i = 0; i < len; ++i) {
-        States[i].epoll_fd = epoll_create1(0);
-        if (States[i].epoll_fd < 0)
-            err(EXIT_FAILURE, "failed to start epoll");
-    }
-}
-
-static void register_epoll(int fd, enum power_state power_mode)
-{
-    struct epoll_event event = {
-        .data.fd = fd,
-        .events  = EPOLLIN | EPOLLET
-    };
-
-    if ((power_mode == AC_OFF || power_mode == AC_BOTH) &&
-        (epoll_ctl(States[AC_OFF].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
-        err(EXIT_FAILURE, "failed to add udev monitor to epoll");
-
-    if ((power_mode == AC_ON || power_mode == AC_BOTH) &&
-        (epoll_ctl(States[AC_ON].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
-        err(EXIT_FAILURE, "failed to add udev monitor to epoll");
-}
-// }}}
 
 static void register_device(const char *devnode, int fd)
 {
@@ -148,7 +117,36 @@ static void unregister_device(const char *devnode)
     }
 }
 
-// {{{1 EVDEV INPUT
+// {{{1 EPOLL
+static void epoll_init(void)
+{
+    size_t i, len = sizeof(States) / sizeof(States[0]);
+
+    for (i = 0; i < len; ++i) {
+        States[i].epoll_fd = epoll_create1(0);
+        if (States[i].epoll_fd < 0)
+            err(EXIT_FAILURE, "failed to start epoll");
+    }
+}
+
+static void register_epoll(int fd, enum power_state power_mode)
+{
+    struct epoll_event event = {
+        .data.fd = fd,
+        .events  = EPOLLIN | EPOLLET
+    };
+
+    if ((power_mode == AC_OFF || power_mode == AC_BOTH) &&
+        (epoll_ctl(States[AC_OFF].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
+        err(EXIT_FAILURE, "failed to add udev monitor to epoll");
+
+    if ((power_mode == AC_ON || power_mode == AC_BOTH) &&
+        (epoll_ctl(States[AC_ON].epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0))
+        err(EXIT_FAILURE, "failed to add udev monitor to epoll");
+}
+// }}}
+
+// {{{1 EVDEV
 static uint8_t bit(int bit, const uint8_t array[static (EV_MAX + 7) / 8])
 {
     return array[bit / 8] & (1 << (bit % 8));
@@ -188,7 +186,7 @@ cleanup:
 }
 // }}}
 
-// {{{1 UDEV MAGIC
+// {{{1 UDEV
 static bool update_power_state(struct udev_device *dev, bool save)
 {
     enum power_state next = power_mode;

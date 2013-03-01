@@ -35,3 +35,7 @@ configured not to grab the device.
 Otherwise ``lightd`` won't be able to wake on activity on the touchpad,
 the driver likes to be greedy by default. I should ship a configlet to
 deal with this.
+
+### TODO
+
+- config file for lightd
