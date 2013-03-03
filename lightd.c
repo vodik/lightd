@@ -63,9 +63,9 @@ static struct power_state_t States[] = {
         .brightness = 100
     },
     [AC_OFF] = {
-        .timeout = 2 * 1000,
+        .timeout = 10 * 1000,
         .brightness = 35,
-        .dim = 20
+        .dim = 10
     }
 }, *state = NULL;
 
