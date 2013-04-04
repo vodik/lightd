@@ -18,7 +18,6 @@
 #ifndef BACKLIGHT_H
 #define BACKLIGHT_H
 
-#define _XOPEN_SOURCE 700
 #include <limits.h>
 
 #define BACKLIGHT_ROOT "/sys/class/backlight"

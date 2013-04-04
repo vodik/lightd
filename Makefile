@@ -2,6 +2,7 @@ VERSION = $(shell git describe --tags)
 
 CFLAGS := -std=c99 \
 	-Wall -Wextra -pedantic \
+	-D_XOPEN_SOURCE=700 \
 	-DLIGHTD_VERSION=\"${VERSION}\" \
 	${CFLAGS}
 

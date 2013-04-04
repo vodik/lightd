@@ -18,6 +18,7 @@ flags = [
   '-DNDEBUG',
   '-DUSE_CLANG_COMPLETER',
   '-DLIGHTD_VERSION="ycm"',
+  '-D_XOPEN_SOURCE=700',
   '-std=c99',
   '-x', 'c',
 ]
