@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
             usage(stdout);
             break;
         case 'v':
-            printf("%s %s\n", program_invocation_short_name, DIMMER_VERSION);
+            printf("%s %s\n", program_invocation_short_name, LIGHTD_VERSION);
             return 0;
         case 'i':
             action = ACTION_INC;

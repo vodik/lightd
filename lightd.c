@@ -395,8 +395,41 @@ static int loop()
     return 0;
 }
 
-int main(void)
+static void __attribute__((__noreturn__)) usage(FILE *out)
 {
+    fprintf(out, "usage: %s [options]\n", program_invocation_short_name);
+    fputs("Options:\n"
+        " -h, --help             display this help and exit\n"
+        " -v, --version          display version\n", out);
+
+    exit(out == stderr ? EXIT_FAILURE : EXIT_SUCCESS);
+}
+
+int main(int argc, char *argv[])
+{
+    static const struct option opts[] = {
+        { "help",    no_argument, 0, 'h' },
+        { "version", no_argument, 0, 'v' },
+        { 0, 0, 0, 0 }
+    };
+
+    while (true) {
+        int opt = getopt_long(argc, argv, "hv", opts, NULL);
+        if (opt == -1)
+            break;
+
+        switch (opt) {
+        case 'h':
+            usage(stdout);
+            break;
+        case 'v':
+            printf("%s %s\n", program_invocation_short_name, LIGHTD_VERSION);
+            return 0;
+        default:
+            usage(stderr);
+        }
+    }
+
     /* TODO: replace with udev code */
     if (backlight_find_best(&b) < 0)
         errx(EXIT_FAILURE, "failed to get backlight info");

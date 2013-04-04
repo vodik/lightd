@@ -2,7 +2,7 @@ VERSION = $(shell git describe --tags)
 
 CFLAGS := -std=gnu99 \
 	-Wall -Wextra -pedantic \
-	-DDIMMER_VERSION=\"${VERSION}\" \
+	-DLIGHTD_VERSION=\"${VERSION}\" \
 	${CFLAGS}
 
 LDFLAGS := -ludev
