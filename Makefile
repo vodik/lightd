@@ -1,6 +1,6 @@
 VERSION = $(shell git describe --tags)
 
-CFLAGS := -std=gnu99 \
+CFLAGS := -std=c99 \
 	-Wall -Wextra -pedantic \
 	-DLIGHTD_VERSION=\"${VERSION}\" \
 	${CFLAGS}
