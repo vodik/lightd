@@ -79,7 +79,7 @@ static struct udev_monitor *power_mon, *input_mon;
 static void backlight_dim(struct backlight_t *b, double dim)
 {
     state->brightness = backlight_get(b);
-    backlight_set(b, CLAMP(state->brightness - dim, 1.5, 100));
+    backlight_set(b, clamp(state->brightness - dim, 1.5, 100));
 }
 
 static void register_device(const char *devnode, int fd)

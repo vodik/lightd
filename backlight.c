@@ -27,6 +27,11 @@
 
 #include "backlight.h"
 
+inline double clamp(double v, double low, double high)
+{
+    return (v > high) ? high : (v < low) ? low : v;
+}
+
 static int get(filepath_t path, long *value)
 {
     int fd = open(path, O_RDONLY);
@@ -81,7 +86,7 @@ int backlight_init(struct backlight_t *b, const char *device)
 
 int backlight_set(struct backlight_t *b, double value)
 {
-    value = CLAMP(value, 0.0, 100.0) / 100.0 * (double)b->max;
+    value = clamp(value, 0.0, 100.0) / 100.0 * (double)b->max;
     return set(b->dev, (int)(value + 0.5));
 }
 
