@@ -405,11 +405,12 @@ static void timer_init(void)
 
 static int loop()
 {
+    bool dimmed = false;
+    bool timer_unset = false;
     struct epoll_event events[64];
 
     while (true) {
         int i, n = epoll_wait(state->epoll_fd, events, 64, -1);
-        bool save = state->dim == 0;
 
         if (n < 0) {
             if (errno == EINTR)
@@ -425,14 +426,24 @@ static int loop()
             } else if (evt->data.fd == input_mon_fd) {
                 udev_monitor_input();
             } else if (evt->data.fd == power_mon_fd) {
+                bool save = state->dim == 0;
                 udev_monitor_power(save);
             } else if (evt->data.fd == state->timer_fd) {
-                uint64_t value;
-                read(state->timer_fd, &value, 8);
+                dimmed = true;
+                timer_unset = true;
                 backlight_dim(&b, state->dim);
             } else {
-                backlight_set(&b, state->brightness);
-                timer_set(state);
+                /* We don't want to undim or reset the time each time we
+                 * get activity. Creates a massive cpu load */
+                if (dimmed) {
+                    dimmed = false;
+                    backlight_set(&b, state->brightness);
+                }
+
+                if (timer_unset) {
+                    timer_unset = false;
+                    timer_set(state);
+                }
             }
         }
     }
