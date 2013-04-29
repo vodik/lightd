@@ -69,6 +69,7 @@ static struct power_state_t States[] = {
     }
 }, *state = NULL;
 
+static bool dimmer = false;
 static struct fd_data_t *head = NULL;
 static struct backlight_t b;
 static int power_mon_fd, input_mon_fd;
@@ -354,14 +355,15 @@ static void udev_init(void)
         err(EXIT_FAILURE, "can't create udev");
 
     udev_init_power();
-    udev_init_input();
+    if (dimmer)
+        udev_init_input();
 }
 // }}}
 
 static int loop()
 {
     struct epoll_event events[64];
-    int dim_timeout = state->timeout;
+    int dim_timeout = dimmer ? state->timeout : -1;
 
     while (true) {
         int i, n = epoll_wait(state->epoll_fd, events, 64, dim_timeout);
@@ -401,6 +403,7 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
     fputs("Options:\n"
         " -h, --help             display this help and exit\n"
         " -v, --version          display version\n"
+        " -d, --dim              dim the screen when inactivity detected\n"
         " -t, --timeout=VALUE    set the timeout till the screen is dimmed\n", out);
 
     exit(out == stderr ? EXIT_FAILURE : EXIT_SUCCESS);
@@ -411,6 +414,7 @@ int main(int argc, char *argv[])
     static const struct option opts[] = {
         { "help",    no_argument,       0, 'h' },
         { "version", no_argument,       0, 'v' },
+        { "dim",     no_argument,       0, 'd' },
         { "timeout", required_argument, 0, 't' },
         { 0, 0, 0, 0 }
     };
@@ -427,6 +431,9 @@ int main(int argc, char *argv[])
         case 'v':
             printf("%s %s\n", program_invocation_short_name, LIGHTD_VERSION);
             return 0;
+        case 'd':
+            dimmer = true;
+            break;
         case 't':
             States[AC_OFF].timeout = atoi(optarg) * 1000;
             break;
@@ -441,6 +448,7 @@ int main(int argc, char *argv[])
 
     epoll_init();
     udev_init();
+    timer_init();
 
     return loop();
 }
