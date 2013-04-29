@@ -405,7 +405,6 @@ static void timer_init(void)
 static int loop()
 {
     bool dimmed = false;
-    bool timer_unset = false;
     struct epoll_event events[64];
 
     while (true) {
@@ -429,7 +428,6 @@ static int loop()
                 udev_monitor_power(save);
             } else if (evt->data.fd == state->timer_fd) {
                 dimmed = true;
-                timer_unset = true;
                 backlight_dim(&b, state->dim);
             } else {
                 /* We don't want to undim or reset the time each time we
@@ -439,10 +437,7 @@ static int loop()
                     backlight_set(&b, state->brightness);
                 }
 
-                if (timer_unset) {
-                    timer_unset = false;
-                    timer_set(state);
-                }
+                timer_set(state);
             }
         }
     }
