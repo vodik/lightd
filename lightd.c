@@ -31,6 +31,7 @@
 #include <libudev.h>
 #include <sys/types.h>
 #include <sys/epoll.h>
+#include <sys/timerfd.h>
 #include <linux/input.h>
 
 #include "backlight.h"
@@ -44,7 +45,8 @@ enum power_state {
 
 struct power_state_t {
     int epoll_fd;
-    int timeout;
+    int timer_fd;
+    struct timespec timeout;
     double brightness;
     double dim;
 };
@@ -59,11 +61,10 @@ struct fd_data_t {
 static enum power_state power_mode = AC_START;
 static struct power_state_t States[] = {
     [AC_ON] = {
-        .timeout = -1,
         .brightness = 100
     },
     [AC_OFF] = {
-        .timeout = 10 * 1000,
+        .timeout.tv_sec = 10,
         .brightness = 35,
         .dim = 10
     }
@@ -72,10 +73,10 @@ static struct power_state_t States[] = {
 static bool dimmer = false;
 static struct fd_data_t *head = NULL;
 static struct backlight_t b;
-static int power_mon_fd, input_mon_fd;
 
 static struct udev *udev;
 static struct udev_monitor *power_mon, *input_mon;
+static int power_mon_fd, input_mon_fd;
 
 static void backlight_dim(struct backlight_t *b, double dim)
 {
@@ -360,22 +361,60 @@ static void udev_init(void)
 }
 // }}}
 
+// {{{1 TIMER
+static void timer_set(struct power_state_t *state)
+{
+    struct itimerspec spec = {
+        .it_value = state->timeout,
+    };
+
+    if (timerfd_settime(state->timer_fd, 0, &spec, NULL) < 0)
+        err(EXIT_FAILURE, "failed to set timer");
+}
+
+static void timer_state_init(struct power_state_t *state)
+{
+    state->timer_fd = timerfd_create(CLOCK_MONOTONIC,TFD_NONBLOCK);
+    if (state->timer_fd < 0)
+        err(EXIT_FAILURE, "failed to create timer");
+
+    timer_set(state);
+
+    struct epoll_event event = {
+        .data.fd = state->timer_fd,
+        .events  = EPOLLIN | EPOLLET
+    };
+
+    if ((power_mode == AC_OFF || power_mode == AC_BOTH) &&
+        (epoll_ctl(state->epoll_fd, EPOLL_CTL_ADD, state->timer_fd, &event) < 0))
+        err(EXIT_FAILURE, "failed to add udev monitor to epoll");
+}
+
+static void timer_init(void)
+{
+    if (!dimmer)
+        return;
+
+    if (States[AC_ON].dim)
+        timer_state_init(&States[AC_ON]);
+
+    if (States[AC_OFF].dim)
+        timer_state_init(&States[AC_OFF]);
+}
+// }}}
+
 static int loop()
 {
     struct epoll_event events[64];
-    int dim_timeout = dimmer ? state->timeout : -1;
 
     while (true) {
-        int i, n = epoll_wait(state->epoll_fd, events, 64, dim_timeout);
-        bool save = state->dim == 0 || (state->dim > 0 && dim_timeout != -1);
+        int i, n = epoll_wait(state->epoll_fd, events, 64, -1);
+        bool save = state->dim == 0;
 
         if (n < 0) {
             if (errno == EINTR)
                 continue;
             err(EXIT_FAILURE, "epoll_wait failed");
-        } else if (n == 0 && dim_timeout > 0) {
-            dim_timeout = -1;
-            backlight_dim(&b, state->dim);
         }
 
         for (i = 0; i < n; ++i) {
@@ -385,11 +424,15 @@ static int loop()
                 close(evt->data.fd);
             } else if (evt->data.fd == input_mon_fd) {
                 udev_monitor_input();
-            } else if (evt->data.fd == power_mon_fd && udev_monitor_power(save)) {
-                dim_timeout = state->timeout;
-            } else if (dim_timeout == -1 && state->timeout != -1) {
-                dim_timeout = state->timeout;
+            } else if (evt->data.fd == power_mon_fd) {
+                udev_monitor_power(save);
+            } else if (evt->data.fd == state->timer_fd) {
+                uint64_t value;
+                read(state->timer_fd, &value, 8);
+                backlight_dim(&b, state->dim);
+            } else {
                 backlight_set(&b, state->brightness);
+                timer_set(state);
             }
         }
     }
@@ -420,7 +463,7 @@ int main(int argc, char *argv[])
     };
 
     while (true) {
-        int opt = getopt_long(argc, argv, "hvt:", opts, NULL);
+        int opt = getopt_long(argc, argv, "hvdt:", opts, NULL);
         if (opt == -1)
             break;
 
@@ -435,7 +478,7 @@ int main(int argc, char *argv[])
             dimmer = true;
             break;
         case 't':
-            States[AC_OFF].timeout = atoi(optarg) * 1000;
+            States[AC_OFF].timeout.tv_sec = atoi(optarg);
             break;
         default:
             usage(stderr);
