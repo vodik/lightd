@@ -385,9 +385,8 @@ static void timer_state_init(struct power_state_t *state)
         .events  = EPOLLIN | EPOLLET
     };
 
-    if ((power_mode == AC_OFF || power_mode == AC_BOTH) &&
-        (epoll_ctl(state->epoll_fd, EPOLL_CTL_ADD, state->timer_fd, &event) < 0))
-        err(EXIT_FAILURE, "failed to add udev monitor to epoll");
+    if (epoll_ctl(state->epoll_fd, EPOLL_CTL_ADD, state->timer_fd, &event) < 0)
+        err(EXIT_FAILURE, "failed to add state's time to epoll");
 }
 
 static void timer_init(void)
