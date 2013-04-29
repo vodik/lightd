@@ -451,7 +451,8 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
     fputs("Options:\n"
         " -h, --help             display this help and exit\n"
         " -v, --version          display version\n"
-        " -d, --dim              dim the screen when inactivity detected\n"
+        " -D, --dimmer           dim the screen when inactivity detected\n"
+        " -d, --dim=VALUE        the amount to dim the screen by\n"
         " -t, --timeout=VALUE    set the timeout till the screen is dimmed\n", out);
 
     exit(out == stderr ? EXIT_FAILURE : EXIT_SUCCESS);
@@ -462,13 +463,14 @@ int main(int argc, char *argv[])
     static const struct option opts[] = {
         { "help",    no_argument,       0, 'h' },
         { "version", no_argument,       0, 'v' },
-        { "dim",     no_argument,       0, 'd' },
+        { "dimmer",  no_argument,       0, 'D' },
+        { "dim",     required_argument, 0, 'd' },
         { "timeout", required_argument, 0, 't' },
         { 0, 0, 0, 0 }
     };
 
     while (true) {
-        int opt = getopt_long(argc, argv, "hvdt:", opts, NULL);
+        int opt = getopt_long(argc, argv, "hvDd:t:", opts, NULL);
         if (opt == -1)
             break;
 
@@ -479,8 +481,11 @@ int main(int argc, char *argv[])
         case 'v':
             printf("%s %s\n", program_invocation_short_name, LIGHTD_VERSION);
             return 0;
-        case 'd':
+        case 'D':
             dimmer = true;
+            break;
+        case 'd':
+            States[AC_OFF].dim = atof(optarg);
             break;
         case 't':
             States[AC_OFF].timeout.tv_sec = atoi(optarg);
