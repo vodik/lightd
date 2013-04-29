@@ -147,7 +147,7 @@ static void register_epoll(int fd, enum power_state power_mode)
 // }}}
 
 // {{{1 EVDEV
-static uint8_t bit(int bit, const uint8_t array[static (EV_MAX + 7) / 8])
+static inline uint8_t bit(int bit, const uint8_t array[static (EV_MAX + 7) / 8])
 {
     return array[bit / 8] & (1 << (bit % 8));
 }
@@ -400,7 +400,8 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
     fprintf(out, "usage: %s [options]\n", program_invocation_short_name);
     fputs("Options:\n"
         " -h, --help             display this help and exit\n"
-        " -v, --version          display version\n", out);
+        " -v, --version          display version\n"
+        " -t, --timeout=VALUE    set the timeout till the screen is dimmed\n", out);
 
     exit(out == stderr ? EXIT_FAILURE : EXIT_SUCCESS);
 }
@@ -408,13 +409,14 @@ static void __attribute__((__noreturn__)) usage(FILE *out)
 int main(int argc, char *argv[])
 {
     static const struct option opts[] = {
-        { "help",    no_argument, 0, 'h' },
-        { "version", no_argument, 0, 'v' },
+        { "help",    no_argument,       0, 'h' },
+        { "version", no_argument,       0, 'v' },
+        { "timeout", required_argument, 0, 't' },
         { 0, 0, 0, 0 }
     };
 
     while (true) {
-        int opt = getopt_long(argc, argv, "hv", opts, NULL);
+        int opt = getopt_long(argc, argv, "hvt:", opts, NULL);
         if (opt == -1)
             break;
 
@@ -425,6 +427,9 @@ int main(int argc, char *argv[])
         case 'v':
             printf("%s %s\n", program_invocation_short_name, LIGHTD_VERSION);
             return 0;
+        case 't':
+            States[AC_OFF].timeout = atoi(optarg) * 1000;
+            break;
         default:
             usage(stderr);
         }
