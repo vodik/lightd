@@ -2,7 +2,7 @@
 Description=A simple backlight daemon
 
 [Service]
-ExecStart=/usr/bin/lightd
+ExecStart=/usr/bin/lightd --dimmer
 StandardOutput=syslog
 StandardError=syslog
 
